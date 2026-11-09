@@ -1,0 +1,19 @@
+# LiveKit SFU dev config.
+# The api_key/secret pair here MUST match LIVEKIT_API_KEY / LIVEKIT_API_SECRET in the backend .env.
+# Only the backend holds the secret; the mobile app never sees it.
+port: 7880
+rtc:
+  tcp_port: 7881
+  udp_port: 7882          # single UDP mux port (not a range) — only 7882/udp to open
+  use_external_ip: false
+  # TWO-DEVICE / LAN TESTING: LiveKit runs in Docker, so by default it advertises its
+  # container IP (172.x) which phones cannot reach. Uncomment and set this to your
+  # laptop's LAN IP so phones can connect media. Example:
+  node_ip: 10.148.240.90
+redis:
+  address: redis:6379
+keys:
+  # devkey: devsecret_change_me  (override via .env for anything beyond local dev)
+  devkey: devsecret_change_me_please_32chars_min
+logging:
+  level: info

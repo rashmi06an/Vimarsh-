@@ -1,0 +1,9 @@
+# LiveKit Egress config (optional — only needed for server-side recording).
+# Must match livekit.yaml keys. Egress reaches LiveKit + Redis on the compose network.
+redis:
+  address: redis:6379
+api_key: devkey
+api_secret: devsecret_change_me_please_32chars_min
+ws_url: ws://livekit:7880
+log_level: info
+# Recordings are uploaded straight to MinIO via the S3 params the backend passes per-egress.
