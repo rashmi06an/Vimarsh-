@@ -1,0 +1,285 @@
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import * as argon2 from 'argon2';
+import { OtpPurpose, UserStatus } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { MailService } from '../mail/mail.service';
+import { AuditService } from '../audit/audit.service';
+import { TokensService } from './tokens.service';
+import { generateOtp } from '../common/crypto/hash.util';
+import {
+  ForgotPasswordDto,
+  LoginDto,
+  OrgVerificationDto,
+  RegisterDto,
+  ResetPasswordDto,
+  VerifyOtpDto,
+} from './dto/auth.dto';
+
+interface LockState {
+  fails: number;
+  lockedUntil: number | null;
+}
+
+@Injectable()
+export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+  // In-memory login lockout (single API instance; documented in STUDENT.md).
+  private readonly locks = new Map<string, LockState>();
+  // Track last OTP send per email to enforce resend cooldown.
+  private readonly lastOtpSent = new Map<string, number>();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mail: MailService,
+    private readonly audit: AuditService,
+    private readonly tokens: TokensService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // ---------------- Registration + OTP ----------------
+
+  async register(dto: RegisterDto) {
+    const email = dto.email.toLowerCase().trim();
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      // Do not reveal too much, but a duplicate email is a legitimate 409 for registration UX.
+      throw new ConflictException('An account with this email already exists');
+    }
+    const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        fullName: dto.fullName.trim(),
+        phone: dto.phone,
+        passwordHash,
+        role: 'GUEST', // never a privileged role at registration
+        status: UserStatus.PENDING_OTP,
+      },
+    });
+    // Record consent to terms/privacy at sign-up (privacy: explicit consent trail).
+    await this.prisma.consentRecord.create({ data: { userId: user.id, type: 'TERMS_PRIVACY', version: '1.0' } });
+    await this.issueOtp(user.id, email, OtpPurpose.EMAIL_VERIFY);
+    await this.audit.log({ actorId: user.id, action: 'AUTH_REGISTER', targetType: 'User', targetId: user.id, metadata: { email } });
+    return { message: 'Registered. Check your email for the verification code.', email, status: user.status };
+  }
+
+  private async issueOtp(userId: string, email: string, purpose: OtpPurpose): Promise<void> {
+    const cooldown = this.config.get<number>('throttle.otpResendCooldown') ?? 60;
+    const key = `${email}:${purpose}`;
+    const last = this.lastOtpSent.get(key);
+    if (last && Date.now() - last < cooldown * 1000) {
+      throw new BadRequestException(`Please wait before requesting another code`);
+    }
+
+    const code = generateOtp(6);
+    const codeHash = await argon2.hash(code, { type: argon2.argon2id });
+    const ttl = this.config.get<number>('throttle.otpTtlSeconds') ?? 600;
+
+    // Invalidate all prior OTPs of this purpose (keep exactly one active code).
+    await this.prisma.otp.deleteMany({ where: { userId, purpose } });
+    await this.prisma.otp.create({
+      data: { userId, codeHash, purpose, expiresAt: new Date(Date.now() + ttl * 1000) },
+    });
+    this.lastOtpSent.set(key, Date.now());
+    await this.mail.sendOtp(email, code, purpose);
+  }
+
+  async verifyOtp(dto: VerifyOtpDto) {
+    const email = dto.email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw new NotFoundException('User not found');
+
+    const otp = await this.prisma.otp.findFirst({
+      where: { userId: user.id, purpose: OtpPurpose.EMAIL_VERIFY },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otp || otp.consumedAt) throw new BadRequestException('No active code. Please request a new one.');
+    await this.assertOtpUsable(otp.id, otp.attempts, otp.expiresAt);
+
+    const ok = await argon2.verify(otp.codeHash, dto.code);
+    if (!ok) {
+      await this.prisma.otp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      throw new BadRequestException('Incorrect code');
+    }
+
+    await this.prisma.otp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } });
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true, status: UserStatus.PENDING_APPROVAL },
+    });
+    await this.audit.log({ actorId: user.id, action: 'AUTH_EMAIL_VERIFIED', targetType: 'User', targetId: user.id });
+    // Issue a session now so the user can complete org verification and track their
+    // approval status. The token carries status=PENDING_APPROVAL; real features stay
+    // role-gated (the user is still a GUEST), so this grants no privileged access.
+    const pair = await this.tokens.issuePair(updated);
+    return {
+      message: 'Email verified. Complete organization verification, then await approval.',
+      status: updated.status,
+      ...pair,
+      user: this.publicUser(updated),
+    };
+  }
+
+  private async assertOtpUsable(otpId: string, attempts: number, expiresAt: Date): Promise<void> {
+    const maxAttempts = this.config.get<number>('throttle.otpMaxAttempts') ?? 5;
+    if (expiresAt.getTime() < Date.now()) {
+      await this.prisma.otp.delete({ where: { id: otpId } }).catch(() => undefined);
+      throw new BadRequestException('Code expired. Please request a new one.');
+    }
+    if (attempts >= maxAttempts) {
+      throw new BadRequestException('Too many incorrect attempts. Please request a new code.');
+    }
+  }
+
+  async resendOtp(email: string) {
+    const normalized = email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email: normalized } });
+    // Do not reveal whether the account exists.
+    if (user && user.status === UserStatus.PENDING_OTP) {
+      await this.issueOtp(user.id, normalized, OtpPurpose.EMAIL_VERIFY);
+    }
+    return { message: 'If an account is pending verification, a new code has been sent.' };
+  }
+
+  // ---------------- Organization verification ----------------
+
+  async submitOrgVerification(userId: string, dto: OrgVerificationDto) {
+    const org = await this.prisma.organization.findUnique({ where: { id: dto.orgId } });
+    if (!org) throw new BadRequestException('Unknown organization');
+    if (dto.departmentId) {
+      const dept = await this.prisma.department.findUnique({ where: { id: dto.departmentId } });
+      if (!dept || dept.orgId !== dto.orgId) throw new BadRequestException('Invalid department for organization');
+    }
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { orgId: dto.orgId, departmentId: dto.departmentId ?? null, designation: dto.designation.trim() },
+    });
+    await this.audit.log({ actorId: userId, action: 'AUTH_ORG_SUBMITTED', targetType: 'User', targetId: userId, orgId: dto.orgId });
+    return { message: 'Organization details submitted. Awaiting approval.', status: user.status };
+  }
+
+  // ---------------- Login / refresh / logout ----------------
+
+  async login(dto: LoginDto) {
+    const email = dto.email.toLowerCase().trim();
+    this.assertNotLocked(email);
+
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    const valid = user ? await argon2.verify(user.passwordHash, dto.password).catch(() => false) : false;
+
+    if (!user || !valid) {
+      this.registerFailure(email);
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    // Status gating with clear, honest messages.
+    // Email must be verified; SUSPENDED is blocked outright. PENDING_APPROVAL and REJECTED
+    // users CAN sign in — only to see their application status; they get no features
+    // (still GUEST role, so every protected route 403s) until approved.
+    if (user.status === UserStatus.PENDING_OTP) throw new ForbiddenException('Email not verified. Please verify the OTP sent to your email.');
+    if (user.status === UserStatus.SUSPENDED) throw new ForbiddenException('Your account is suspended.');
+
+    this.clearFailures(email);
+    const pair = await this.tokens.issuePair(user, dto.deviceInfo);
+    await this.audit.log({ actorId: user.id, action: 'AUTH_LOGIN', targetType: 'User', targetId: user.id, orgId: user.orgId });
+    return { ...pair, user: this.publicUser(user) };
+  }
+
+  async refresh(refreshToken: string) {
+    return this.tokens.rotate(refreshToken);
+  }
+
+  async logout(familyId: string, userId: string) {
+    await this.tokens.revokeFamily(familyId);
+    await this.audit.log({ actorId: userId, action: 'AUTH_LOGOUT', targetType: 'Session', targetId: familyId });
+    return { message: 'Logged out' };
+  }
+
+  // ---------------- Password reset ----------------
+
+  async forgotPassword(dto: ForgotPasswordDto) {
+    const email = dto.email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (user) {
+      await this.issueOtp(user.id, email, OtpPurpose.PASSWORD_RESET);
+    }
+    // Always same response (no account enumeration).
+    return { message: 'If an account exists, a reset code has been sent.' };
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const email = dto.email.toLowerCase().trim();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user) throw new BadRequestException('Invalid reset request');
+
+    const otp = await this.prisma.otp.findFirst({
+      where: { userId: user.id, purpose: OtpPurpose.PASSWORD_RESET },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!otp || otp.consumedAt) throw new BadRequestException('No active reset code. Please request a new one.');
+    await this.assertOtpUsable(otp.id, otp.attempts, otp.expiresAt);
+
+    const ok = await argon2.verify(otp.codeHash, dto.code);
+    if (!ok) {
+      await this.prisma.otp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
+      throw new BadRequestException('Incorrect code');
+    }
+
+    const passwordHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
+    await this.prisma.$transaction([
+      this.prisma.otp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } }),
+      this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
+      // Revoke all sessions on password reset.
+      this.prisma.session.updateMany({ where: { userId: user.id, revokedAt: { isSet: false } }, data: { revokedAt: new Date() } }),
+    ]);
+    await this.audit.log({ actorId: user.id, action: 'AUTH_PASSWORD_RESET', targetType: 'User', targetId: user.id });
+    return { message: 'Password reset. Please sign in with your new password.' };
+  }
+
+  // ---------------- Lockout helpers ----------------
+
+  private assertNotLocked(email: string): void {
+    const state = this.locks.get(email);
+    if (state?.lockedUntil && state.lockedUntil > Date.now()) {
+      const mins = Math.ceil((state.lockedUntil - Date.now()) / 60000);
+      throw new ForbiddenException(`Too many failed attempts. Try again in ~${mins} minute(s).`);
+    }
+  }
+
+  private registerFailure(email: string): void {
+    const max = this.config.get<number>('throttle.loginMaxAttempts') ?? 5;
+    const lockMins = this.config.get<number>('throttle.loginLockMinutes') ?? 15;
+    const state = this.locks.get(email) ?? { fails: 0, lockedUntil: null };
+    state.fails += 1;
+    if (state.fails >= max) {
+      state.lockedUntil = Date.now() + lockMins * 60000;
+      state.fails = 0;
+    }
+    this.locks.set(email, state);
+  }
+
+  private clearFailures(email: string): void {
+    this.locks.delete(email);
+  }
+
+  private publicUser(u: { id: string; email: string; fullName: string; role: string; status: string; orgId: string | null; designation: string | null }) {
+    return {
+      id: u.id,
+      email: u.email,
+      fullName: u.fullName,
+      role: u.role,
+      status: u.status,
+      orgId: u.orgId,
+      designation: u.designation,
+    };
+  }
+}
