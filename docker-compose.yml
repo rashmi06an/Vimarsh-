@@ -1,0 +1,87 @@
+# Vimarsh local infrastructure.
+# Services: mongo (single-node replica set, required by Prisma), redis, livekit SFU, minio.
+# The NestJS API runs on the host during development (npm run start:dev) and talks to these.
+# Secrets come from .env (never commit real secrets). See .env.example for the full list.
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: vimarsh-mongo
+    restart: unless-stopped
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Initiate the single-node replica set once, then report healthy.
+      test: >
+        mongosh --quiet --eval
+        "try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }"
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: vimarsh-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.9
+    container_name: vimarsh-livekit
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    ports:
+      - "7880:7880"     # WebSocket / HTTP signalling
+      - "7881:7881"     # TCP fallback (ICE/TURN)
+      - "7882:7882/udp" # UDP RTC
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    depends_on:
+      - redis
+
+  # OPTIONAL: server-side recording. Heavy (runs headless Chrome) — start explicitly with
+  #   docker compose up -d livekit-egress
+  # Only needed when you actually record a live meeting (Phase 5). Safe to leave stopped.
+  livekit-egress:
+    image: livekit/egress:v1.9
+    container_name: vimarsh-livekit-egress
+    restart: unless-stopped
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./livekit/egress.yaml:/etc/egress.yaml:ro
+    cap_add:
+      - SYS_ADMIN
+    depends_on:
+      - redis
+      - livekit
+    profiles: ["recording"]
+
+  # MinIO community images were removed from Docker Hub (Sept 2026), so we use the
+  # Chainguard-published image. The backend creates the private bucket at boot via the
+  # S3 SDK (ensureBucket()), so no separate `mc` client container is needed.
+  minio:
+    image: cgr.dev/chainguard/minio:latest
+    container_name: vimarsh-minio
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-vimarsh}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-vimarsh-secret}
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web console
+    volumes:
+      - minio-data:/data
+
+volumes:
+  mongo-data:
+  redis-data:
+  minio-data:
