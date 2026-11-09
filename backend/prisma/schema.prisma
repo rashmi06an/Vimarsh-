@@ -1,0 +1,342 @@
+// Vimarsh data model — Prisma + MongoDB.
+// MongoDB runs as a single-node replica set (rs0) so Prisma transactions work.
+// Every mutating service enforces role + org + meeting scope BEFORE touching these models.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+enum Role {
+  SUPER_ADMIN // AICTE
+  MINISTRY
+  INSTITUTE_ADMIN
+  HOD
+  FACULTY
+  GUEST
+}
+
+enum UserStatus {
+  PENDING_OTP // registered, email not verified
+  PENDING_APPROVAL // email verified, awaiting approval
+  APPROVED
+  REJECTED
+  SUSPENDED
+}
+
+enum OtpPurpose {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+}
+
+enum OrgType {
+  AICTE
+  MINISTRY
+  INSTITUTE
+}
+
+enum Confidentiality {
+  PUBLIC
+  INTERNAL
+  CONFIDENTIAL
+  RESTRICTED
+}
+
+enum MeetingStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+  CANCELLED
+}
+
+enum InvitationRole {
+  PARTICIPANT
+  GUEST
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+}
+
+enum ParticipantState {
+  INVITED
+  WAITING
+  ADMITTED
+  JOINED
+  LEFT
+  REMOVED
+  DENIED
+}
+
+enum ScanStatus {
+  SKIPPED // no scanner configured
+  PENDING
+  CLEAN
+  INFECTED
+}
+
+enum RecordingStatus {
+  STARTING
+  ACTIVE
+  STOPPING
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+model User {
+  id              String     @id @default(auto()) @map("_id") @db.ObjectId
+  email           String     @unique
+  emailVerified   Boolean    @default(false)
+  passwordHash    String
+  fullName        String
+  phone           String?
+  role            Role       @default(GUEST)
+  status          UserStatus @default(PENDING_OTP)
+  orgId           String?    @db.ObjectId
+  departmentId    String?    @db.ObjectId
+  designation     String?
+  rejectionReason String?
+  photoUrl        String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  org          Organization? @relation(fields: [orgId], references: [id])
+  department   Department?   @relation(fields: [departmentId], references: [id])
+  otps         Otp[]
+  sessions     Session[]
+  hostedMeetings Meeting[]   @relation("MeetingHost")
+
+  @@index([orgId, role])
+  @@index([status])
+}
+
+model Otp {
+  id        String     @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String     @db.ObjectId
+  codeHash  String
+  purpose   OtpPurpose
+  expiresAt DateTime
+  attempts  Int        @default(0)
+  consumedAt DateTime?
+  createdAt DateTime   @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, purpose])
+}
+
+model Session {
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId           String    @db.ObjectId
+  deviceInfo       String?
+  refreshTokenHash String
+  familyId         String // rotating refresh token family
+  rotatedFrom      String?
+  replacedByHash   String?
+  revokedAt        DateTime?
+  expiresAt        DateTime
+  createdAt        DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+model Organization {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  type      OrgType
+  code      String   @unique
+  parentId  String?  @db.ObjectId
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+
+  departments Department[]
+  users       User[]
+  meetings    Meeting[]
+}
+
+model Department {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  orgId     String   @db.ObjectId
+  name      String
+  hodUserId String?  @db.ObjectId
+  createdAt DateTime @default(now())
+
+  org   Organization @relation(fields: [orgId], references: [id])
+  users User[]
+
+  @@index([orgId])
+}
+
+model Meeting {
+  id              String          @id @default(auto()) @map("_id") @db.ObjectId
+  meetingCode     String          @unique // VMR-<year>-XXXXXX
+  title           String
+  description     String?
+  agenda          String?
+  hostId          String          @db.ObjectId
+  orgId           String          @db.ObjectId
+  departmentId    String?         @db.ObjectId
+  startAt         DateTime
+  endAt           DateTime
+  timezone        String          @default("Asia/Kolkata")
+  type            String          @default("STANDARD")
+  confidentiality Confidentiality @default(INTERNAL)
+  status          MeetingStatus   @default(SCHEDULED)
+  waitingRoomEnabled Boolean      @default(true)
+  passcodeHash    String?
+  locked          Boolean         @default(false)
+  capacity        Int             @default(100)
+  livekitRoom     String // room name used with LiveKit
+
+  // policies
+  allowRecording   Boolean @default(false)
+  allowScreenShare Boolean @default(true)
+  allowChat        Boolean @default(true)
+  micOnJoin        Boolean @default(false)
+  cameraOnJoin     Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  host         User          @relation("MeetingHost", fields: [hostId], references: [id])
+  org          Organization  @relation(fields: [orgId], references: [id])
+  invitations  Invitation[]
+  participants Participant[]
+  documents    Document[]
+  recordings   Recording[]
+
+  @@index([orgId, startAt])
+  @@index([hostId, startAt])
+  @@index([status])
+}
+
+model Invitation {
+  id            String           @id @default(auto()) @map("_id") @db.ObjectId
+  meetingId     String           @db.ObjectId
+  inviteeUserId String?          @db.ObjectId
+  inviteeEmail  String?
+  role          InvitationRole   @default(PARTICIPANT)
+  status        InvitationStatus @default(PENDING)
+  tokenHash     String? // hashed deep-link token for guest invitations
+  expiresAt     DateTime
+  createdAt     DateTime         @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id])
+
+  @@index([meetingId])
+  @@index([inviteeUserId])
+  @@index([inviteeEmail])
+}
+
+model Participant {
+  id        String           @id @default(auto()) @map("_id") @db.ObjectId
+  meetingId String           @db.ObjectId
+  userId    String?          @db.ObjectId
+  guestName String?
+  state     ParticipantState @default(INVITED)
+  handRaised Boolean         @default(false)
+  joinedAt  DateTime?
+  leftAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id])
+
+  @@index([meetingId, userId])
+  @@index([meetingId, state])
+}
+
+model Document {
+  id          String     @id @default(auto()) @map("_id") @db.ObjectId
+  meetingId   String     @db.ObjectId
+  uploaderId  String     @db.ObjectId
+  fileName    String
+  storageKey  String // object key in MinIO (private)
+  contentType String // validated from file content, not client MIME
+  sizeBytes   Int
+  sha256      String // SHA-256 of the ORIGINAL plaintext (integrity of the file the user uploaded)
+  scanStatus  ScanStatus @default(SKIPPED)
+  // Encryption at rest (AES-256-GCM). The object in MinIO is ciphertext; these let the
+  // backend decrypt it after authorization. Nullable so pre-encryption rows still read.
+  encAlgo     String? // e.g. "aes-256-gcm"
+  encIv       String? // base64, 12-byte per-file nonce
+  encTag      String? // base64, 16-byte GCM auth tag
+  createdAt   DateTime   @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id])
+
+  @@index([meetingId])
+}
+
+model Recording {
+  id         String          @id @default(auto()) @map("_id") @db.ObjectId
+  meetingId  String          @db.ObjectId
+  egressId   String?
+  storageKey String?
+  status     RecordingStatus @default(STARTING)
+  startedBy  String          @db.ObjectId
+  startedAt  DateTime        @default(now())
+  endedAt    DateTime?
+
+  meeting Meeting @relation(fields: [meetingId], references: [id])
+
+  @@index([meetingId])
+}
+
+model Notification {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String    @db.ObjectId
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+// Append-only, hash-chained audit log (SHA-256 over canonical fields).
+// seq is monotonic per chain; each record stores prevHash + its own hash.
+model AuditLog {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  seq        Int      @unique
+  actorId    String?  @db.ObjectId
+  action     String
+  targetType String?
+  targetId   String?
+  orgId      String?  @db.ObjectId
+  metadata   Json?
+  prevHash   String
+  hash       String
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+}
+
+model ConsentRecord {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  type      String
+  version   String
+  grantedAt DateTime @default(now())
+
+  @@index([userId])
+}
