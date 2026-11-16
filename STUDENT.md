@@ -1416,3 +1416,68 @@ the diff focused. No active path touches `MailService` anymore.
 ### 31.6 Verification
 - `backend`: `nest build` clean, `prisma generate` clean.
 - `mobile`: `npx tsc --noEmit` exit 0.
+
+---
+
+## 32. END-TO-END + SECURITY TEST — admin password reset & invites (session 2026-11-16)
+
+Ran the full chain against the new backend on a local instance (port 4055, local Mongo),
+driving the real HTTP API. **25/25 assertions passed.**
+
+### Functional (invite onboarding + password reset)
+- Admin login ✓ · Admin generates invite (code returned once) ✓
+- Register with invite → auto-login, status APPROVED ✓ · reused invite rejected (single-use) ✓
+- Forgot-password → request created ✓ · admin sees it in pending ✓
+- Admin approve → one-time code issued ✓ · member resets with it ✓
+- New password works, old password rejected ✓ · reused reset code rejected (single-use) ✓
+- Bad code → uniform "Invalid or expired reset request." ✓
+- After a reset, the old **refresh token / session is revoked** (refresh → 401) ✓, and a login
+  with the latest password works ✓.
+
+### Security (the checks explicitly requested)
+- **Code shown only once:** plaintext appears in exactly two responses — invite generate and
+  reset approve — and nowhere else. Verified at runtime (scanned every other response body) and
+  statically (`formatInviteCode()` called only in `invites.service.ts` + `password-reset.service.ts`).
+- **No DB leak:** only `tokenHash` / `codeHash` (SHA-256) are stored; no plaintext column exists.
+- **No log leak:** scanned the running server log for every issued code → none present. The
+  services contain zero `logger`/`console` calls.
+- **No error leak / no re-fetch:** reset errors are uniform; re-approving an already-handled
+  request returns 400 (the code cannot be retrieved a second time).
+
+### One honest nuance (documented, by design)
+Password reset revokes the durable **sessions (refresh tokens)**, so old logins cannot persist.
+A **stateless access JWT** stays valid until its short TTL (≤15 min) — the system does not do a
+per-request session check. This matches the app's existing JWT model. If instantaneous
+revocation of access tokens is ever required, the `JwtAuthGuard` would need to verify the
+session id (`sid`) against the DB on each request (a per-request DB lookup) — not currently done.
+
+### Note on rate-limiting
+While testing, rapid repeated calls returned **429 Too Many Requests** — the `@Throttle` limits
+on the auth routes working as intended (restarting the API clears the in-memory counters).
+
+---
+
+## 33. INSTANT ACCESS-TOKEN REVOCATION (session 2026-11-16) — supersedes §32 nuance
+
+### Why
+Previously a reset/logout revoked the durable session (refresh token), but a stateless access
+JWT stayed valid until its ≤15-min TTL. For a confidential AICTE platform that residual window
+is unacceptable — a reset should kill existing access immediately.
+
+### What changed
+`src/common/guards/jwt-auth.guard.ts` now, on **every authenticated request**, verifies that the
+token's session family (`sid`, already embedded in the JWT) still has an ACTIVE, unexpired
+`Session` row. If logout / password reset / refresh-reuse has revoked that family, the access
+token is rejected (401) on the next request. One indexed lookup (`Session @@index([familyId])`);
+can be fronted by Redis later without changing semantics. No token-format or mobile change.
+
+### Behaviour now
+- Password reset → all sessions revoked → **old access token rejected instantly** (verified).
+- Logout and refresh-token-reuse detection likewise reject the access token immediately.
+- Active sessions pass normally; the mobile client's transparent refresh-then-logout handles a
+  revoked session gracefully (forces re-login).
+
+### Verified
+- `nest build` clean.
+- Full E2E re-run: **26/26 passed**, incl. "old access token INSTANTLY revoked after reset (401)"
+  while "tokenA valid before reset (200)" still passes (normal sessions unaffected).
