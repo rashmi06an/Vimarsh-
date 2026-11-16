@@ -5,31 +5,65 @@ import { Screen } from '../../components/Screen';
 import { Text } from '../../components/Text';
 import { TextField } from '../../components/TextField';
 import { Button } from '../../components/Button';
-import { colors, spacing } from '../../theme';
+import { QrScanner } from '../../components/QrScanner';
+import { colors, radius, spacing } from '../../theme';
 import { t } from '../../i18n';
-import { authApi } from '../../api/endpoints';
+import { authApi, invitesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
+import { useAuth } from '../../auth/AuthContext';
+import type { InviteValidation } from '../../api/types';
 import type { AuthStackParams } from '../../navigation/types';
 
 type Props = NativeStackScreenProps<AuthStackParams, 'Register'>;
 
 const emailOk = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
 const passwordOk = (p: string) => /^(?=.*[A-Za-z])(?=.*\d).{8,}$/.test(p);
+// Canonicalise a typed/scanned code the same way the backend does (strip prefix, dashes, case).
+const normalizeCode = (raw: string) =>
+  (raw ?? '').toUpperCase().replace(/VIMARSH:\/\/INVITE\//g, '').replace(/[^A-Z0-9]/g, '');
 
-export function RegisterScreen({ navigation }: Props) {
+export function RegisterScreen({ navigation, route }: Props) {
+  const { adoptSession } = useAuth();
+  const [inviteCode, setInviteCode] = useState(route.params?.inviteToken ?? '');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
   const [phone, setPhone] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [submitErr, setSubmitErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [invite, setInvite] = useState<InviteValidation | null>(null);
+
+  // Pre-check the code so the member sees what they're joining before filling the form.
+  const checkInvite = async (raw: string) => {
+    const code = normalizeCode(raw);
+    if (code.length < 8) {
+      setInvite(null);
+      return;
+    }
+    try {
+      setInvite(await invitesApi.validate(code));
+    } catch {
+      setInvite(null);
+    }
+  };
+
+  const onScanned = (data: string) => {
+    setScanning(false);
+    const code = normalizeCode(data);
+    setInviteCode(code);
+    checkInvite(code);
+  };
 
   const validate = (): boolean => {
     const e: Record<string, string> = {};
+    if (normalizeCode(inviteCode).length < 8) e.inviteCode = t('register.inviteRequired');
     if (!fullName.trim()) e.fullName = t('common.required');
     if (!emailOk(email)) e.email = 'Enter a valid email';
     if (!passwordOk(password)) e.password = t('register.passwordHint');
+    if (password !== confirm) e.confirm = t('register.passwordsNoMatch');
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -39,13 +73,15 @@ export function RegisterScreen({ navigation }: Props) {
     if (!validate()) return;
     setLoading(true);
     try {
-      await authApi.register({
+      const res = await authApi.register({
+        inviteToken: normalizeCode(inviteCode),
         email: email.trim().toLowerCase(),
         fullName: fullName.trim(),
         password,
         phone: phone.trim() || undefined,
       });
-      navigation.navigate('Otp', { email: email.trim().toLowerCase() });
+      // Account is active and a session is returned — sign straight in.
+      await adoptSession({ accessToken: res.accessToken, refreshToken: res.refreshToken, expiresIn: res.expiresIn }, res.user);
     } catch (err) {
       setSubmitErr(err instanceof ApiError ? err.message : t('errors.generic'));
     } finally {
@@ -62,9 +98,32 @@ export function RegisterScreen({ navigation }: Props) {
         </Text>
       </View>
 
+      <TextField
+        label={t('register.inviteLabel')}
+        value={inviteCode}
+        onChangeText={setInviteCode}
+        onEndEditing={() => checkInvite(inviteCode)}
+        error={errors.inviteCode}
+        placeholder={t('register.invitePlaceholder')}
+        autoCapitalize="characters"
+        autoCorrect={false}
+      />
+      <Button title={t('register.scan')} variant="outline" onPress={() => setScanning(true)} />
+
+      {invite?.valid && (
+        <View style={styles.inviteBanner}>
+          <Text variant="caption" color={colors.success ?? colors.primary}>
+            {t('register.joiningAs', { role: invite.role ?? '', org: invite.orgName ?? '' })}
+          </Text>
+        </View>
+      )}
+
+      <View style={styles.gap} />
+
       <TextField label={t('common.fullName')} value={fullName} onChangeText={setFullName} error={errors.fullName} autoCapitalize="words" />
       <TextField label={t('common.email')} value={email} onChangeText={setEmail} error={errors.email} keyboardType="email-address" autoComplete="email" />
       <TextField label={t('common.password')} value={password} onChangeText={setPassword} error={errors.password} secure />
+      <TextField label={t('register.confirmPassword')} value={confirm} onChangeText={setConfirm} error={errors.confirm} secure />
       <TextField label={t('common.phone')} value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
 
       {!!submitErr && (
@@ -75,6 +134,8 @@ export function RegisterScreen({ navigation }: Props) {
 
       <Button title={t('register.cta')} variant="accent" onPress={onSubmit} loading={loading} />
       <Button title={t('register.haveAccount')} variant="ghost" onPress={() => navigation.navigate('Login')} />
+
+      <QrScanner visible={scanning} onClose={() => setScanning(false)} onScanned={onScanned} />
     </Screen>
   );
 }
@@ -82,5 +143,12 @@ export function RegisterScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   header: { marginTop: spacing.lg, marginBottom: spacing.xl },
   sub: { marginTop: spacing.sm },
+  gap: { height: spacing.md },
+  inviteBanner: {
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceAlt,
+  },
   err: { marginBottom: spacing.md },
 });

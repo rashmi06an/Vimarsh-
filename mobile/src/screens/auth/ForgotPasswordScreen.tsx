@@ -17,6 +17,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
   const [email, setEmail] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [requested, setRequested] = useState(false);
 
   const onSubmit = async () => {
     setError(null);
@@ -27,13 +28,32 @@ export function ForgotPasswordScreen({ navigation }: Props) {
     setLoading(true);
     try {
       await authApi.forgotPassword(email.trim().toLowerCase());
-      navigation.navigate('ResetPassword', { email: email.trim().toLowerCase() });
+      setRequested(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t('errors.generic'));
     } finally {
       setLoading(false);
     }
   };
+
+  if (requested) {
+    return (
+      <Screen scroll>
+        <View style={styles.header}>
+          <Text variant="title">{t('forgot.requestedTitle')}</Text>
+          <Text variant="body" color={colors.textMuted} style={styles.sub}>
+            {t('forgot.requestedBody')}
+          </Text>
+        </View>
+        <Button
+          title={t('forgot.haveCode')}
+          variant="accent"
+          onPress={() => navigation.navigate('ResetPassword', { email: email.trim().toLowerCase() })}
+        />
+        <Button title={t('common.back')} variant="ghost" onPress={() => navigation.navigate('Login')} />
+      </Screen>
+    );
+  }
 
   return (
     <Screen scroll>
@@ -43,7 +63,7 @@ export function ForgotPasswordScreen({ navigation }: Props) {
           {t('forgot.subtitle')}
         </Text>
       </View>
-      <TextField label={t('common.email')} value={email} onChangeText={setEmail} keyboardType="email-address" />
+      <TextField label={t('common.email')} value={email} onChangeText={setEmail} keyboardType="email-address" autoComplete="email" />
       {!!error && (
         <Text variant="body" color={colors.danger} style={styles.err}>
           {error}

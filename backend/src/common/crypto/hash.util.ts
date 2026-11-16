@@ -50,3 +50,37 @@ export function generateMeetingCode(year = new Date().getFullYear()): string {
   for (let i = 0; i < 6; i++) suffix += alphabet[randomInt(0, alphabet.length)];
   return `VMR-${year}-${suffix}`;
 }
+
+// ---------------------------------------------------------------------------
+// Admin invite codes (QR-based onboarding). The admin generates a code, a new
+// member scans/types it to register. The code is a SECRET: we store only its
+// SHA-256 hash, never the plaintext.
+// ---------------------------------------------------------------------------
+
+// Unambiguous alphabet — no 0/O, 1/I/L, so a code is easy to read off a screen
+// and to type by hand if the camera cannot scan the QR.
+const INVITE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+/** Cryptographically-random invite code (default 16 chars ≈ 79 bits of entropy). */
+export function generateInviteCode(length = 16): string {
+  let out = '';
+  for (let i = 0; i < length; i++) out += INVITE_ALPHABET[randomInt(0, INVITE_ALPHABET.length)];
+  return out;
+}
+
+/**
+ * Canonicalise a scanned or hand-typed invite code so the QR path and the
+ * manual-entry path always hash to the same value: uppercase, strip anything
+ * that is not a letter or digit (spaces, dashes, a `vimarsh://invite/` prefix…).
+ */
+export function normalizeInviteCode(raw: string): string {
+  return (raw ?? '')
+    .toUpperCase()
+    .replace(/VIMARSH:\/\/INVITE\//g, '')
+    .replace(/[^A-Z0-9]/g, '');
+}
+
+/** Pretty-print a code as XXXX-XXXX-XXXX-XXXX for display and QR encoding. */
+export function formatInviteCode(code: string): string {
+  return code.replace(/(.{4})(?=.)/g, '$1-');
+}

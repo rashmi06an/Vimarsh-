@@ -12,6 +12,8 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { OrgsModule } from './orgs/orgs.module';
 import { ApprovalsModule } from './approvals/approvals.module';
+import { InvitesModule } from './invites/invites.module';
+import { PasswordResetModule } from './password-reset/password-reset.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { LivekitModule } from './livekit/livekit.module';
 import { RealtimeModule } from './realtime/realtime.module';
@@ -41,6 +43,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     UsersModule,
     OrgsModule,
     ApprovalsModule,
+    InvitesModule,
+    PasswordResetModule,
     NotificationsModule,
     LivekitModule,
     RealtimeModule,

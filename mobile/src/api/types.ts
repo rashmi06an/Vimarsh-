@@ -30,6 +30,57 @@ export interface LoginResponse extends TokenPair {
   user: PublicUser;
 }
 
+export interface RegisterResponse extends TokenPair {
+  message: string;
+  status: UserStatus;
+  user: PublicUser;
+}
+
+// ---- Admin invite (QR onboarding) ----
+export interface InviteValidation {
+  valid: boolean;
+  role?: Role;
+  orgName?: string | null;
+  departmentName?: string | null;
+}
+
+export interface CreatedInvite {
+  id: string;
+  code: string; // formatted XXXX-XXXX-XXXX-XXXX; shown once
+  role: Role;
+  orgName: string;
+  note: string | null;
+  expiresAt: string;
+}
+
+export type InviteState = 'ACTIVE' | 'REDEEMED' | 'REVOKED' | 'EXPIRED';
+
+// ---- Admin password-reset recovery ----
+export interface PendingResetItem {
+  id: string;
+  userId: string;
+  email: string;
+  fullName: string;
+  requestedAt: string;
+}
+
+export interface ApprovedReset {
+  code: string; // one-time reset code; shown once
+  email: string;
+  fullName: string;
+  expiresAt: string;
+}
+
+export interface InviteListItem {
+  id: string;
+  role: Role;
+  note: string | null;
+  status: InviteState;
+  expiresAt: string;
+  redeemedAt: string | null;
+  createdAt: string;
+}
+
 export interface Organization {
   id: string;
   name: string;

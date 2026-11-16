@@ -1,9 +1,14 @@
 import { apiRequest, uploadFile, downloadDocument } from './client';
 import {
+  ApprovedReset,
   CreateMeetingInput,
+  CreatedInvite,
   Department,
   InvitationItem,
+  InviteListItem,
+  InviteValidation,
   LoginResponse,
+  PendingResetItem,
   MeetingDetails,
   MeetingScope,
   MeetingSummary,
@@ -11,6 +16,7 @@ import {
   Organization,
   Profile,
   PublicUser,
+  RegisterResponse,
   Role,
   TokenPair,
 } from './types';
@@ -22,8 +28,9 @@ interface VerifyOtpResponse extends TokenPair {
 }
 
 export const authApi = {
-  register: (body: { email: string; fullName: string; password: string; phone?: string }) =>
-    apiRequest<{ message: string; email: string; status: string }>('/auth/register', { method: 'POST', body, auth: false }),
+  // Invite-gated registration: no OTP/email. Returns a session (auto-login) on success.
+  register: (body: { inviteToken: string; email: string; fullName: string; password: string; phone?: string }) =>
+    apiRequest<RegisterResponse>('/auth/register', { method: 'POST', body, auth: false }),
 
   verifyOtp: (body: { email: string; code: string }) =>
     apiRequest<VerifyOtpResponse>('/auth/verify-otp', { method: 'POST', body, auth: false }),
@@ -108,6 +115,24 @@ export const notificationsApi = {
   unreadCount: () => apiRequest<{ count: number }>('/notifications/unread-count'),
   markRead: (id: string) => apiRequest<{ message: string }>(`/notifications/${id}/read`, { method: 'POST' }),
   markAllRead: () => apiRequest<{ message: string }>('/notifications/read-all', { method: 'POST' }),
+};
+
+export const invitesApi = {
+  // Admin: generate a single-use onboarding invite. The code is returned once (for the QR).
+  create: (body: { role?: Role; departmentId?: string; orgId?: string; note?: string; ttlHours?: number }) =>
+    apiRequest<CreatedInvite>('/invites', { method: 'POST', body }),
+  list: () => apiRequest<InviteListItem[]>('/invites'),
+  revoke: (id: string) => apiRequest<{ message: string }>(`/invites/${id}/revoke`, { method: 'POST' }),
+  // Public: pre-check a code before the new member fills in the registration form.
+  validate: (code: string) =>
+    apiRequest<InviteValidation>('/invites/validate', { method: 'POST', body: { code }, auth: false }),
+};
+
+export const passwordResetsApi = {
+  // Admin: review and act on member password-reset requests (no email involved).
+  pending: () => apiRequest<PendingResetItem[]>('/password-resets/pending'),
+  approve: (id: string) => apiRequest<ApprovedReset>(`/password-resets/${id}/approve`, { method: 'POST' }),
+  reject: (id: string) => apiRequest<{ message: string }>(`/password-resets/${id}/reject`, { method: 'POST' }),
 };
 
 export const approvalsApi = {

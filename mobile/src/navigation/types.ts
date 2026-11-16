@@ -3,7 +3,7 @@ import type { NavigatorScreenParams } from '@react-navigation/native';
 export type AuthStackParams = {
   Welcome: undefined;
   Login: undefined;
-  Register: undefined;
+  Register: { inviteToken?: string } | undefined;
   Otp: { email: string };
   ForgotPassword: undefined;
   ResetPassword: { email: string };
@@ -25,6 +25,8 @@ export type MeetingsStackParams = {
 export type AdminStackParams = {
   AdminHome: undefined;
   Approvals: undefined;
+  Invites: undefined;
+  PasswordResets: undefined;
   AuditLog: undefined;
 };
 

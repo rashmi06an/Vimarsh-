@@ -22,13 +22,16 @@ export function ResetPasswordScreen({ route, navigation }: Props) {
   const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const normalizeCode = (raw: string) =>
+    raw.toUpperCase().replace(/VIMARSH:\/\/INVITE\//g, '').replace(/[^A-Z0-9]/g, '');
+
   const onSubmit = async () => {
     setError(null);
-    if (code.length !== 6) return setError('Enter the 6-digit code');
+    if (normalizeCode(code).length < 8) return setError(t('register.inviteRequired'));
     if (!passwordOk(newPassword)) return setError(t('register.passwordHint'));
     setLoading(true);
     try {
-      await authApi.resetPassword({ email, code, newPassword });
+      await authApi.resetPassword({ email, code: normalizeCode(code), newPassword });
       setDone(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : t('errors.generic'));
@@ -56,10 +59,17 @@ export function ResetPasswordScreen({ route, navigation }: Props) {
       <View style={styles.header}>
         <Text variant="title">{t('forgot.title')}</Text>
         <Text variant="body" color={colors.textMuted} style={styles.sub}>
-          {t('otp.subtitle', { email })}
+          {t('forgot.enterEmail')}
         </Text>
       </View>
-      <TextField label={t('forgot.codeLabel')} value={code} onChangeText={(x) => setCode(x.replace(/\D/g, '').slice(0, 6))} keyboardType="number-pad" />
+      <TextField
+        label={t('forgot.codeLabel')}
+        value={code}
+        onChangeText={setCode}
+        placeholder={t('forgot.codePlaceholder')}
+        autoCapitalize="characters"
+        autoCorrect={false}
+      />
       <TextField label={t('forgot.newPassword')} value={newPassword} onChangeText={setNewPassword} secure />
       {!!error && (
         <Text variant="body" color={colors.danger} style={styles.err}>

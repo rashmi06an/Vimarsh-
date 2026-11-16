@@ -8,7 +8,7 @@ import { Text } from '../../components/Text';
 import { Card } from '../../components/Card';
 import { RoleBadge } from '../../components/Badge';
 import { colors, spacing } from '../../theme';
-import { approvalsApi } from '../../api/endpoints';
+import { approvalsApi, passwordResetsApi } from '../../api/endpoints';
 import { useAuth } from '../../auth/AuthContext';
 import type { AdminStackParams } from '../../navigation/types';
 
@@ -18,6 +18,8 @@ export function AdminHomeScreen({ navigation }: Props) {
   const { user } = useAuth();
   const pending = useQuery({ queryKey: ['approvals'], queryFn: () => approvalsApi.pending() });
   const count = pending.data?.length ?? 0;
+  const resets = useQuery({ queryKey: ['password-resets'], queryFn: () => passwordResetsApi.pending() });
+  const resetCount = resets.data?.length ?? 0;
 
   return (
     <Screen scroll>
@@ -29,7 +31,9 @@ export function AdminHomeScreen({ navigation }: Props) {
         {user?.role && <RoleBadge role={user.role} />}
       </View>
 
+      <Tile icon="qr-code-outline" title="Member invitations" subtitle="Generate one-time QR onboarding codes" onPress={() => navigation.navigate('Invites')} />
       <Tile icon="checkmark-done-outline" title="Registration approvals" subtitle={count > 0 ? `${count} pending` : 'No pending'} onPress={() => navigation.navigate('Approvals')} badge={count} />
+      <Tile icon="key-outline" title="Password resets" subtitle={resetCount > 0 ? `${resetCount} pending` : 'No pending'} onPress={() => navigation.navigate('PasswordResets')} badge={resetCount} />
       <Tile icon="shield-checkmark-outline" title="Audit log" subtitle="Hash-chained · verify integrity" onPress={() => navigation.navigate('AuditLog')} />
     </Screen>
   );

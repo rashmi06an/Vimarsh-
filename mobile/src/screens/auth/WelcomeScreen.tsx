@@ -29,7 +29,7 @@ export function WelcomeScreen({ navigation }: Props) {
         <View style={styles.gapSm} />
         <Button title={t('welcome.register')} variant="outline" onPress={() => navigation.navigate('Register')} />
         <View style={styles.gapSm} />
-        <Button title={t('welcome.joinViaInvitation')} variant="ghost" onPress={() => navigation.navigate('Login')} />
+        <Button title={t('welcome.joinViaInvitation')} variant="ghost" onPress={() => navigation.navigate('Register')} />
       </View>
 
       <Text variant="caption" color="rgba(255,255,255,0.7)" center style={styles.footer}>

@@ -9,12 +9,13 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
-import { OtpPurpose, UserStatus } from '@prisma/client';
+import { InviteStatus, OtpPurpose, Prisma, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
 import { TokensService } from './tokens.service';
-import { generateOtp } from '../common/crypto/hash.util';
+import { PasswordResetService } from '../password-reset/password-reset.service';
+import { generateOtp, normalizeInviteCode, sha256Hex } from '../common/crypto/hash.util';
 import {
   ForgotPasswordDto,
   LoginDto,
@@ -43,33 +44,88 @@ export class AuthService {
     private readonly audit: AuditService,
     private readonly tokens: TokensService,
     private readonly config: ConfigService,
+    private readonly passwordReset: PasswordResetService,
   ) {}
 
   // ---------------- Registration + OTP ----------------
 
+  /**
+   * Admin-controlled, QR-based registration. There is NO email or OTP here.
+   * A valid, unused, unexpired admin invite is required; redeeming it:
+   *   - is ATOMIC and single-use (an ACTIVE→REDEEMED conditional update inside a
+   *     transaction — two people cannot claim the same code), and
+   *   - grants the role / org / department the admin baked into the invite, so the
+   *     account is created already APPROVED and the member can use the app at once.
+   * We return a session immediately (auto-login) so scan → register → in.
+   */
   async register(dto: RegisterDto) {
     const email = dto.email.toLowerCase().trim();
+    const code = normalizeInviteCode(dto.inviteToken);
+    if (code.length < 8) throw new BadRequestException('A valid invitation code is required.');
+    const tokenHash = sha256Hex(code);
+
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) {
-      // Do not reveal too much, but a duplicate email is a legitimate 409 for registration UX.
       throw new ConflictException('An account with this email already exists');
     }
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
-    const user = await this.prisma.user.create({
-      data: {
-        email,
-        fullName: dto.fullName.trim(),
-        phone: dto.phone,
-        passwordHash,
-        role: 'GUEST', // never a privileged role at registration
-        status: UserStatus.PENDING_OTP,
-      },
+
+    let user;
+    try {
+      user = await this.prisma.$transaction(async (tx) => {
+        // Atomic claim: succeeds for exactly one caller, and only while the invite is
+        // ACTIVE and unexpired. count === 0 means invalid / expired / already used / revoked.
+        const claim = await tx.invite.updateMany({
+          where: { tokenHash, status: InviteStatus.ACTIVE, expiresAt: { gt: new Date() } },
+          data: { status: InviteStatus.REDEEMED, redeemedAt: new Date() },
+        });
+        if (claim.count === 0) {
+          throw new BadRequestException('This invitation is invalid, expired, or already used.');
+        }
+        const invite = await tx.invite.findUnique({ where: { tokenHash } });
+        const created = await tx.user.create({
+          data: {
+            email,
+            fullName: dto.fullName.trim(),
+            phone: dto.phone,
+            passwordHash,
+            role: invite!.role, // the admin chose this when generating the invite
+            status: UserStatus.APPROVED, // pre-authorised by the admin — no approval queue
+            emailVerified: true, // email is just an identifier here; nothing is sent
+            orgId: invite!.orgId ?? null,
+            departmentId: invite!.departmentId ?? null,
+          },
+        });
+        await tx.invite.update({ where: { tokenHash }, data: { redeemedByUserId: created.id } });
+        // Explicit consent trail at sign-up (privacy requirement).
+        await tx.consentRecord.create({ data: { userId: created.id, type: 'TERMS_PRIVACY', version: '1.0' } });
+        return created;
+      });
+    } catch (err) {
+      // Lost an email-uniqueness race inside the transaction → report as a clean 409.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('An account with this email already exists');
+      }
+      throw err;
+    }
+
+    await this.audit.log({
+      actorId: user.id,
+      action: 'AUTH_REGISTER',
+      targetType: 'User',
+      targetId: user.id,
+      orgId: user.orgId,
+      metadata: { email, via: 'INVITE' },
     });
-    // Record consent to terms/privacy at sign-up (privacy: explicit consent trail).
-    await this.prisma.consentRecord.create({ data: { userId: user.id, type: 'TERMS_PRIVACY', version: '1.0' } });
-    await this.issueOtp(user.id, email, OtpPurpose.EMAIL_VERIFY);
-    await this.audit.log({ actorId: user.id, action: 'AUTH_REGISTER', targetType: 'User', targetId: user.id, metadata: { email } });
-    return { message: 'Registered. Check your email for the verification code.', email, status: user.status };
+
+    // Account is active → sign the member in right away.
+    const pair = await this.tokens.issuePair(user);
+    return {
+      message: 'Account created. You are signed in.',
+      status: user.status,
+      ...pair,
+      user: this.publicUser(user),
+    };
   }
 
   private async issueOtp(userId: string, email: string, purpose: OtpPurpose): Promise<void> {
@@ -204,45 +260,17 @@ export class AuthService {
     return { message: 'Logged out' };
   }
 
-  // ---------------- Password reset ----------------
+  // ---------------- Password reset (admin-controlled; no email/SMTP) ----------------
+  // A member requests a reset; an admin approves it from their dashboard, which issues a
+  // short-lived one-time code; the member uses it to set a new password. See
+  // PasswordResetService for the full flow.
 
   async forgotPassword(dto: ForgotPasswordDto) {
-    const email = dto.email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (user) {
-      await this.issueOtp(user.id, email, OtpPurpose.PASSWORD_RESET);
-    }
-    // Always same response (no account enumeration).
-    return { message: 'If an account exists, a reset code has been sent.' };
+    return this.passwordReset.requestReset(dto.email);
   }
 
   async resetPassword(dto: ResetPasswordDto) {
-    const email = dto.email.toLowerCase().trim();
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) throw new BadRequestException('Invalid reset request');
-
-    const otp = await this.prisma.otp.findFirst({
-      where: { userId: user.id, purpose: OtpPurpose.PASSWORD_RESET },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!otp || otp.consumedAt) throw new BadRequestException('No active reset code. Please request a new one.');
-    await this.assertOtpUsable(otp.id, otp.attempts, otp.expiresAt);
-
-    const ok = await argon2.verify(otp.codeHash, dto.code);
-    if (!ok) {
-      await this.prisma.otp.update({ where: { id: otp.id }, data: { attempts: { increment: 1 } } });
-      throw new BadRequestException('Incorrect code');
-    }
-
-    const passwordHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
-    await this.prisma.$transaction([
-      this.prisma.otp.update({ where: { id: otp.id }, data: { consumedAt: new Date() } }),
-      this.prisma.user.update({ where: { id: user.id }, data: { passwordHash } }),
-      // Revoke all sessions on password reset.
-      this.prisma.session.updateMany({ where: { userId: user.id, revokedAt: { isSet: false } }, data: { revokedAt: new Date() } }),
-    ]);
-    await this.audit.log({ actorId: user.id, action: 'AUTH_PASSWORD_RESET', targetType: 'User', targetId: user.id });
-    return { message: 'Password reset. Please sign in with your new password.' };
+    return this.passwordReset.completeReset(dto.email, dto.code, dto.newPassword);
   }
 
   // ---------------- Lockout helpers ----------------

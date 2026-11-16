@@ -46,6 +46,12 @@
           }
         }
       ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "AICTE Vimarsh uses the camera to scan your invitation QR code during sign-up."
+        }
+      ],
       "expo-sharing"
     ]
   }

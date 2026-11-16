@@ -15,6 +15,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
 
 export class RegisterDto {
+  @ApiProperty({ example: 'ABCD-EFGH-JKLM-NPQR', description: 'Single-use invite code from an admin (scanned QR or typed)' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  inviteToken!: string;
+
   @ApiProperty({ example: 'faculty@iitd.ac.in' })
   @IsEmail()
   email!: string;
@@ -106,9 +112,10 @@ export class ResetPasswordDto {
   @IsEmail()
   email!: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({ example: 'ABCD-EFGH-JKLM-NPQR', description: 'One-time reset code issued by an admin' })
   @IsString()
-  @Length(6, 6)
+  @IsNotEmpty()
+  @MaxLength(64)
   code!: string;
 
   @ApiProperty({ example: 'NewPassw0rd!' })

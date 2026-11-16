@@ -1281,3 +1281,138 @@ Do **not** say "yes to everything." Say:
 > accountability**, Vimarsh is better: the data never leaves AICTE's servers, access is approval- and
 > role-gated, documents are encrypted at rest, and every sensitive action is in a verifiable audit
 > chain. That is the security that matters here."
+
+---
+
+## 30. QR-BASED ADMIN ONBOARDING (session of 2026-11-16) — what / why / how
+
+### 30.1 Why this was built
+The earlier design verified a new user by emailing a 6-digit OTP. On the free Render host
+that path **cannot work**: Render blocks outbound SMTP (ports 25/465/587), so the OTP email
+hangs ~124s and registration fails with a 500 (see §-OTP diagnosis). The fix is to remove
+email from onboarding entirely and put the admin in control of who can register — the exact
+AICTE model: identity is vouched for by an administrator, not by "whoever owns an inbox".
+
+**New flow:** Admin generates a QR → new member scans/types it → fills in a password →
+account is created **already approved** and is signed in. No OTP, no SMTP, no email service.
+(Decision locked with the user: **email stays as the login identifier / "User ID"**, so
+meeting invitations, guest links and the seeded admin account keep working unchanged.)
+
+### 30.2 The three security rules (from the spec) and where each is enforced
+1. **Random, single-use, expiry-based token.**
+   - Code = 16 chars from an unambiguous alphabet (`generateInviteCode`, no 0/O/1/I/L), ~79 bits.
+   - Stored only as `sha256(code)` in `Invite.tokenHash` — the plaintext lives **only** in the QR,
+     returned exactly once at generation. (`backend/src/invites/invites.service.ts`)
+   - `expiresAt` enforced everywhere; default validity 48h.
+2. **Atomic redemption (no two people can use the same code).**
+   - `AuthService.register()` runs a Prisma interactive transaction. The claim is a single
+     conditional `updateMany({ where: { tokenHash, status: ACTIVE, expiresAt > now }, data:{ REDEEMED }})`.
+     Mongo applies that per-document update atomically; `count === 0` ⇒ already used / expired /
+     revoked ⇒ rejected. The user row is created in the same transaction, so a failure rolls back
+     the redemption. (`backend/src/auth/auth.service.ts`)
+3. **Login rate-limiting + lockout** — unchanged, already present: in-memory lockout in
+   `AuthService` (`assertNotLocked` / `registerFailure`) + `@Throttle` on the auth routes.
+
+### 30.3 Files added / changed
+**Backend**
+- `prisma/schema.prisma` — new `Invite` model + `InviteStatus` enum (ACTIVE / REDEEMED / REVOKED).
+- `src/common/crypto/hash.util.ts` — `generateInviteCode`, `normalizeInviteCode`, `formatInviteCode`.
+- `src/invites/` (new module) — `invites.service.ts`, `invites.controller.ts`, `invites.module.ts`,
+  `dto/invite.dto.ts`. Endpoints:
+  - `POST /invites` (admin: SUPER_ADMIN / INSTITUTE_ADMIN / HOD) → generate; returns the code once.
+  - `GET /invites` → list (scoped to the admin's org; super admin sees all).
+  - `POST /invites/:id/revoke` → cancel an unused invite.
+  - `POST /invites/validate` (public) → pre-check a code before the register form.
+- `src/auth/auth.service.ts` — `register()` rewritten: invite-gated, atomic redeem, account created
+  `APPROVED` with the invite's role/org, **auto-login** (returns a token pair). No mail call.
+- `src/auth/dto/auth.dto.ts` — `RegisterDto` gains required `inviteToken`.
+- `src/app.module.ts` — registers `InvitesModule`.
+- `prisma/seed.ts` — DEV-ONLY demo invite `VIMARSH-DEMO-2026` (FACULTY @ IITD) so the flow is
+  testable without first logging in as admin. **Never seeded in production.**
+
+**Mobile**
+- New deps (SDK-57 compatible): `react-native-svg`, `react-native-qrcode-svg` (QR render),
+  `expo-camera` (scan). `app.json` gains the `expo-camera` plugin + camera permission string.
+- `src/components/QrImage.tsx` (render a QR), `src/components/QrScanner.tsx` (camera modal, with
+  manual-entry fallback if permission denied).
+- `src/screens/auth/RegisterScreen.tsx` — invite-code field (scan or type) + confirm-password +
+  live "joining as <role> · <org>" banner; on success **auto-logs in** instead of going to OTP.
+- `src/screens/admin/InvitesScreen.tsx` (new) — generate (role chips + note), show QR + code once,
+  list existing invites with status + revoke. Linked from `AdminHomeScreen` + `AdminStack`.
+- `src/api/endpoints.ts` + `types.ts` — `invitesApi` + invite types; `authApi.register` now takes
+  `inviteToken` and returns a session.
+- `src/i18n/en.ts`, `navigation/types.ts` — strings + route params.
+
+### 30.4 What I deliberately did NOT change (and why)
+- **Forgot/Reset password still uses email OTP** → it still depends on SMTP and will NOT work on
+  Render free. Out of scope for this change (the spec was about *onboarding*). Options if needed
+  later: an admin "reset this user's password" action, or an HTTP email API. The register+login
+  critical path now has **zero** email dependency.
+- **OTP code (verify/resend) left in place** but unused by the new register flow — harmless.
+- **Email kept as the account key** (per the user's decision) so nothing else in the app broke.
+
+### 30.5 How to run / verify
+1. Backend: `npx prisma generate && npx prisma db push` (creates the `Invite` collection), then
+   (dev) `npm run prisma:seed` to get the demo invite. On Render, the existing build command's
+   `npx prisma db push` handles the schema; the admin generates invites in-app (no seed in prod).
+2. Register with code `VIMARSH-DEMO-2026` (dev) → account is created and signed in immediately.
+3. Admin path: log in as super admin → Admin → Member invitations → Generate → show the QR.
+4. **The mobile app MUST be rebuilt** (new native modules: expo-camera, react-native-svg) —
+   `cd mobile/android && ./gradlew assembleRelease`.
+
+### 30.6 Verification done this session
+- `backend`: `nest build` clean; `prisma generate` clean; seed typechecks.
+- `mobile`: `npx tsc --noEmit` exit 0.
+
+---
+
+## 31. ADMIN-CONTROLLED PASSWORD RESET (session of 2026-11-16) — what / why / how
+
+### 31.1 Why
+Forgot-password was the last flow still depending on email OTP, which cannot work on Render
+free (SMTP blocked). Replaced with the same admin-vouched model as onboarding — **no email,
+no SMTP**. Confirmed with the user: registration + login + password reset are now all
+SMTP-independent.
+
+### 31.2 Flow
+1. Member (not logged in) → Forgot password → enters email → a `REQUESTED` record is created
+   for an admin. Response is uniform ("if an account exists…") — no account enumeration.
+2. Admin → Admin → *Password resets* → sees pending requests → **Approve** generates a
+   one-time, 60-minute reset code (shown once, to relay to the member) or **Reject**.
+3. Member → "I have a reset code" → enters email + code + new password → password re-hashed
+   with **Argon2id**, record marked `USED` (atomic single-use), and **all existing sessions
+   are revoked**.
+
+### 31.3 Security properties
+- Reset code: 16-char random (same generator as invites), stored only as `sha256`, 60-min TTL.
+- Redemption is an atomic `APPROVED→USED` conditional update inside a transaction with the
+  password update + session revocation — single-use, no race.
+- Admin scoping: SUPER_ADMIN sees all; INSTITUTE_ADMIN/HOD only their own org (org snapshot on
+  the request row). Admin roles are never reset-able by lower admins beyond their scope.
+- Every step audited: `PASSWORD_RESET_REQUESTED / _APPROVED / _REJECTED / _COMPLETED`.
+
+### 31.4 Files
+**Backend**
+- `prisma/schema.prisma` — `PasswordReset` model + `PasswordResetStatus` enum.
+- `src/password-reset/` (new) — service (request/complete/listPending/approve/reject),
+  controller (`GET /password-resets/pending`, `POST /:id/approve`, `POST /:id/reject`), module.
+- `src/auth/auth.service.ts` — `forgotPassword` / `resetPassword` now delegate to the new
+  service (old email-OTP reset logic removed). `auth.module.ts` imports `PasswordResetModule`.
+- `src/auth/dto/auth.dto.ts` — `ResetPasswordDto.code` relaxed from 6-digit to the 16-char code.
+- `src/app.module.ts` — registers `PasswordResetModule`.
+
+**Mobile**
+- `src/screens/auth/ForgotPasswordScreen.tsx` — "request sent to admin" flow.
+- `src/screens/auth/ResetPasswordScreen.tsx` — alphanumeric code input (was 6-digit).
+- `src/screens/admin/PasswordResetsScreen.tsx` (new) — pending list, approve (shows code once),
+  reject. Linked from `AdminHomeScreen` (+ badge) and `AdminStack`.
+- `src/api/endpoints.ts` + `types.ts`, `i18n/en.ts`, `navigation/types.ts` — wiring/strings.
+
+### 31.5 Note on OTP leftovers
+`Otp` model + `verify-otp`/`resend-otp` endpoints remain but are now unused by any active flow
+(email verification was removed in §30, password reset in §31). Harmless; left in place to keep
+the diff focused. No active path touches `MailService` anymore.
+
+### 31.6 Verification
+- `backend`: `nest build` clean, `prisma generate` clean.
+- `mobile`: `npx tsc --noEmit` exit 0.
