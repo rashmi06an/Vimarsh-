@@ -10,6 +10,7 @@ import { Button } from '../../components/Button';
 import { ConfidentialityBadge } from '../../components/Badge';
 import { LoadingState, ErrorState } from '../../components/States';
 import { DocumentsSection } from './DocumentsSection';
+import { RecordingsSection } from './RecordingsSection';
 import { colors, spacing } from '../../theme';
 import { meetingsApi, invitationsApi } from '../../api/endpoints';
 import { formatRange, durationMinutes } from '../../utils/datetime';
@@ -116,6 +117,12 @@ export function MeetingDetailsScreen({ route, navigation }: Props) {
       {/* Documents — visible to anyone with meeting access; upload for invited/host. */}
       {!isCancelled && (
         <DocumentsSection meetingId={id} canUpload={m.canManage || m.myInvitationStatus === 'ACCEPTED' || m.myInvitationStatus === 'PENDING'} />
+      )}
+
+      {/* Recordings — shown when recording is permitted (the only case in which any can exist).
+          Any meeting viewer can access them; opening one is audit-logged by the backend. */}
+      {!isCancelled && m.policies.allowRecording && (
+        <RecordingsSection meetingId={id} />
       )}
 
       {m.canManage && !isCancelled && !isEnded && (
