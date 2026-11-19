@@ -93,16 +93,16 @@ sequenceDiagram
     participant API as NestJS API
     actor Admin
 
-    Member->>App: Forgot password (enter email)
+    Member->>App: Forgot password, enter email
     App->>API: POST /auth/forgot-password
-    API->>API: Create reset request (no code yet); uniform response
+    API->>API: Record a reset request, no code issued yet, uniform response
     Admin->>API: GET /password-resets/pending
-    Admin->>API: POST /password-resets/:id/approve
-    API-->>Admin: One-time reset code (shown once)
+    Admin->>API: POST /password-resets/{id}/approve
+    API-->>Admin: One-time reset code, shown once
     Admin-->>Member: Relay the code
-    Member->>API: POST /auth/reset-password (email, code, new password)
-    API->>API: Verify code (single-use), re-hash password, revoke all sessions
-    API-->>App: Success — sign in with the new password
+    Member->>API: POST /auth/reset-password with email, code, new password
+    API->>API: Verify code once, re-hash password, revoke all sessions
+    API-->>App: Success, sign in with the new password
 ```
 
 The reset code is random, time-limited (60 minutes), single-use, and stored only as a SHA-256 hash. It appears exactly once — in the approval response — and never in listings, logs, database rows, or error messages. Completing a reset revokes all of the member's sessions, so previously issued tokens stop working immediately (see instant revocation below).
@@ -118,16 +118,16 @@ sequenceDiagram
     participant LiveKit
 
     Participant->>App: Request to join meeting
-    App->>API: POST /meetings/:id/join-request
+    App->>API: POST /meetings/{id}/join-request
     API->>API: Check access, passcode, capacity, and meeting state
     alt Waiting room enabled
-        API-->>Host: waiting:request event
+        API-->>Host: Waiting-room request event
         Host->>API: Admit or deny participant
-        API-->>App: waiting:admitted or waiting:denied
+        API-->>App: Admitted or denied
     else Join is allowed directly
         API-->>App: Join request accepted
     end
-    App->>API: POST /meetings/:id/token
+    App->>API: POST /meetings/{id}/token
     API->>API: Verify participant admission
     API-->>App: Short-lived LiveKit room token
     App->>LiveKit: Connect with room token
