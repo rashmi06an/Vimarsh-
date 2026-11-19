@@ -111,13 +111,13 @@ The reset code is random, time-limited (60 minutes), single-use, and stored only
 
 ```mermaid
 sequenceDiagram
-    actor Participant
+    actor Attendee
     participant App as Mobile app
     participant API as NestJS API
     participant Host
     participant LiveKit
 
-    Participant->>App: Request to join meeting
+    Attendee->>App: Request to join meeting
     App->>API: POST /meetings/{id}/join-request
     API->>API: Check access, passcode, capacity, and meeting state
     alt Waiting room enabled
