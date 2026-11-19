@@ -7,7 +7,7 @@ This repository contains an Expo / React Native client, a NestJS API, and local 
 ## At a glance
 
 - Organization-scoped accounts and role-based access for AICTE, ministries, institutes, departments, faculty, and guests.
-- Email OTP verification, approval and onboarding flows, and refreshable login sessions.
+- Admin-issued, single-use QR invitation onboarding (no email or OTP), admin-controlled password reset, and refreshable login sessions with instant server-side revocation.
 - Meeting scheduling, invitations, waiting rooms, participant management, and live conferencing.
 - Socket.IO events for meeting chat, participant updates, and host controls.
 - Meeting documents encrypted at rest and served only after an access check.
@@ -24,7 +24,6 @@ flowchart LR
     Store[("MinIO / S3<br/>private object storage")]
     SFU["LiveKit SFU<br/>signalling and media"]
     Egress["LiveKit Egress<br/>optional recording"]
-    Mail["SMTP server<br/>optional email delivery"]
 
     Person --> App
     App -->|"HTTPS / JSON, access token"| API
@@ -33,12 +32,11 @@ flowchart LR
     API -->|"authorization, users, meetings, audit"| DB
     API -->|"encrypted document objects"| Store
     API -->|"short-lived room tokens"| App
-    API -->|"OTP email"| Mail
     SFU -->|"recording job, when enabled"| Egress
     Egress -->|"recording output"| Store
 ```
 
-The API is the authority for identity, permissions, meeting state, and document access. LiveKit carries real-time audio and video; the client receives a short-lived room token from the API only after meeting admission. Document bytes are encrypted before they are stored in the object store.
+The API is the authority for identity, permissions, meeting state, and document access. LiveKit carries real-time audio and video; the client receives a short-lived room token from the API only after meeting admission. Document bytes are encrypted before they are stored in the object store. Onboarding and password recovery are entirely admin-controlled, so the authentication flow needs no SMTP or external messaging service.
 
 ### Local development services
 
@@ -69,20 +67,45 @@ The API and Expo app run on the host during development. Docker Compose provides
 
 ## Main workflows
 
-### Account onboarding
+### Account onboarding (admin-issued QR invitation)
+
+Registration is gated by a single-use, time-limited invitation an administrator generates and renders as a QR code. There is no email or OTP step. Redeeming the invitation is atomic (a code can be used exactly once, even under concurrent requests) and the new account is created already approved with the role and organization the admin chose, then signed in automatically.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PendingOTP: Register
-    PendingOTP --> PendingApproval: Verify email OTP
-    PendingApproval --> Approved: Organization review approved
-    PendingApproval --> Rejected: Organization review rejected
+    [*] --> InviteIssued: Admin generates single-use QR (role + org, expiry)
+    InviteIssued --> Approved: Member scans/types code + sets password
+    InviteIssued --> Expired: Not used before expiry
+    InviteIssued --> Revoked: Admin revokes before use
+    Approved --> SignedIn: Automatic login after registration
     Approved --> Suspended: Administrator suspends account
     Suspended --> Approved: Administrator restores account
-    Approved --> SignedIn: Login
 ```
 
-The mobile app chooses its navigation tree from the authenticated account state: signed-out users see authentication screens, verified users awaiting review see onboarding/status screens, and approved users see the main application.
+The mobile app chooses its navigation tree from the authenticated account state: signed-out users see authentication screens (including the invitation scanner), and approved users see the main application. The administrator approval workflow remains available for role changes and for suspending or restoring accounts.
+
+### Password reset (admin-controlled, no email)
+
+```mermaid
+sequenceDiagram
+    actor Member
+    participant App as Mobile app
+    participant API as NestJS API
+    actor Admin
+
+    Member->>App: Forgot password (enter email)
+    App->>API: POST /auth/forgot-password
+    API->>API: Create reset request (no code yet); uniform response
+    Admin->>API: GET /password-resets/pending
+    Admin->>API: POST /password-resets/:id/approve
+    API-->>Admin: One-time reset code (shown once)
+    Admin-->>Member: Relay the code
+    Member->>API: POST /auth/reset-password (email, code, new password)
+    API->>API: Verify code (single-use), re-hash password, revoke all sessions
+    API-->>App: Success — sign in with the new password
+```
+
+The reset code is random, time-limited (60 minutes), single-use, and stored only as a SHA-256 hash. It appears exactly once — in the approval response — and never in listings, logs, database rows, or error messages. Completing a reset revokes all of the member's sessions, so previously issued tokens stop working immediately (see instant revocation below).
 
 ### Joining a live meeting
 
@@ -133,8 +156,8 @@ The API does not expose a raw object-store URL for protected documents. Upload s
 
 | Area | What it covers |
 | --- | --- |
-| Accounts and access | Registration, email OTP, password reset, session refresh, account status, roles, and organization scoping |
-| Organization workflows | Organizations, departments, verification, approvals, and invitations |
+| Accounts and access | QR invitation registration (single-use, time-limited), admin-controlled password reset, session refresh with instant revocation, account status, roles, and organization scoping |
+| Organization workflows | Organizations, departments, member onboarding invites, approvals, and meeting invitations |
 | Meetings | Scheduling, listing, invitations, policies, passcodes, waiting rooms, admission, participant actions, and cancellation |
 | Live collaboration | LiveKit room tokens and Socket.IO events for chat, participant changes, raised hands, and host controls |
 | Documents | Content-based file validation, encrypted object storage, access-controlled downloads, integrity hashes, and audit events |
@@ -150,7 +173,8 @@ The backend's role enum includes `SUPER_ADMIN`, `MINISTRY`, `INSTITUTE_ADMIN`, `
 - **Data:** MongoDB configured as a single-node replica set for Prisma transactions.
 - **Media:** LiveKit for real-time rooms; optional LiveKit Egress for recordings.
 - **Object storage:** MinIO for local development and S3-compatible deployments.
-- **Security controls:** Argon2 password hashing, JWT access/refresh sessions, request validation, throttling, role guards, audit logging, and AES-256-GCM document encryption at rest.
+- **Security controls:** Argon2id password hashing, JWT access/refresh sessions with instant server-side session revocation (every authenticated request verifies the session is still active), admin-issued single-use onboarding and password-reset codes (stored only as SHA-256 hashes), request validation, throttling, role guards, audit logging, and AES-256-GCM document encryption at rest.
+- **QR onboarding (mobile):** `react-native-svg` + `react-native-qrcode-svg` to render invitation QR codes, and `expo-camera` to scan them (manual code entry is always available as a fallback).
 
 ## Repository layout
 
@@ -195,7 +219,8 @@ Edit `.env` before starting the application. In particular:
 - Generate a 32-byte document key, for example with `openssl rand -hex 32`, and set `DOCUMENT_ENCRYPTION_KEY`.
 - Replace the development JWT secrets with random values.
 - Set a unique `SEED_SUPER_ADMIN_PASSWORD` for your local bootstrap administrator.
-- Configure SMTP if you want OTP email delivery. Without SMTP, the backend's development-only fallback logs OTPs to its console.
+
+SMTP is not required: onboarding and password reset are admin-controlled and send no email. Any `SMTP_*` settings are legacy and unused by the current authentication flow.
 
 The example file contains development defaults. Do not use them in a deployed environment or commit real credentials.
 
@@ -227,7 +252,7 @@ npm run prisma:push
 npm run seed
 ```
 
-The seed is idempotent and creates an AICTE organization, a sample institute and department, and the configured bootstrap Super Admin. The seed prints the development account email and password; keep those credentials private and change them from the example values.
+The seed is idempotent and creates an AICTE organization, a sample institute and department, and the configured bootstrap Super Admin. Outside production it also prints a development demo invitation code so the QR registration flow can be exercised without first signing in as an administrator. The seed prints the development account email and password; keep those credentials private and change them from the example values.
 
 ### 4. Run the API
 
@@ -268,7 +293,9 @@ The API uses bearer access tokens for protected REST endpoints. The exact reques
 
 | Route group | Examples |
 | --- | --- |
-| Authentication | `POST /auth/register`, `/auth/verify-otp`, `/auth/login`, `/auth/refresh`, `/auth/logout` |
+| Authentication | `POST /auth/register` (requires an invitation code), `/auth/login`, `/auth/refresh`, `/auth/logout`, `/auth/forgot-password`, `/auth/reset-password` |
+| Onboarding invites (admin) | `POST /invites`, `GET /invites`, `POST /invites/:id/revoke`, `POST /invites/validate` (public pre-check) |
+| Password recovery (admin) | `GET /password-resets/pending`, `POST /password-resets/:id/approve`, `POST /password-resets/:id/reject` |
 | Meetings | `GET /meetings`, `POST /meetings`, `POST /meetings/:id/join-request`, `POST /meetings/:id/token` |
 | Documents | `POST /meetings/:id/documents`, `GET /meetings/:id/documents`, `GET /documents/:id/download` |
 | Health | See the health endpoints in Swagger |
@@ -283,7 +310,8 @@ erDiagram
     ORGANIZATION ||--o{ USER : has
     DEPARTMENT ||--o{ USER : assigns
     USER ||--o{ SESSION : authenticates
-    USER ||--o{ OTP : verifies
+    USER ||--o{ INVITE : "issues / redeems"
+    USER ||--o{ PASSWORDRESET : "requests / approves"
     USER ||--o{ MEETING : hosts
     ORGANIZATION ||--o{ MEETING : scopes
     MEETING ||--o{ INVITATION : sends
@@ -296,7 +324,7 @@ erDiagram
     USER ||--o{ AUDITLOG : performs
 ```
 
-The Prisma schema is the source of truth for persisted entities and enums. Meetings, invitations, participants, documents, recordings, notifications, and audit records are related to users and organizations to support scoped access and traceability.
+The Prisma schema is the source of truth for persisted entities and enums. Meetings, invitations, participants, documents, recordings, notifications, and audit records are related to users and organizations to support scoped access and traceability. Onboarding invites and password-reset requests store only SHA-256 hashes of their one-time codes, never the plaintext. (The legacy `Otp` model remains in the schema but is no longer used by the authentication flow.)
 
 ## Tests and checks
 
@@ -323,13 +351,24 @@ npm run typecheck
 ## Configuration and deployment notes
 
 - Root `.env.example` documents backend and Compose settings; `mobile/.env.example` documents the mobile API URL.
-- Keep JWT secrets, SMTP credentials, object-store credentials, and `DOCUMENT_ENCRYPTION_KEY` private.
+- Keep JWT secrets, object-store credentials, LiveKit keys, and `DOCUMENT_ENCRYPTION_KEY` private.
 - Back up the document encryption key securely. Existing encrypted documents cannot be decrypted without the key used to encrypt them.
 - Configure `CORS_ORIGINS` for the intended clients instead of leaving a permissive development setting in production.
 - Set a reachable LiveKit URL and matching API key/secret for the API and LiveKit server. The LiveKit secret belongs on the server, not in the mobile app.
 - For physical-device media tests, configure LiveKit's advertised node IP for the development machine's LAN address and ensure the required media ports are reachable.
 - Egress is optional. Enable its Compose profile only when recording is needed.
 - SMS, push, and malware scanning are provider integration points; empty provider configuration does not mean those external services are active.
+- The authentication flow (registration, login, password reset) requires no SMTP or outbound email, so the platform runs on hosts that block outbound SMTP, including free PaaS tiers.
+
+### Deployment reference
+
+The project has been deployed with the API on [Render](https://render.com) and MongoDB on [MongoDB Atlas](https://www.mongodb.com/atlas) (a replica set, required by Prisma transactions). Notes for that setup:
+
+- Build command installs dev dependencies, generates the Prisma client, builds, and syncs the schema, for example: `npm install --include=dev && npx prisma generate && npm run build && npx prisma db push`. Installing dev dependencies matters because `NODE_ENV=production` otherwise skips them and `nest`/`prisma` are unavailable at build time.
+- The API binds `0.0.0.0` and reads `PORT` from the environment, so it works behind a managed host's port assignment.
+- Set `DATABASE_URL` to the Atlas connection string, and set the JWT secrets, `DOCUMENT_ENCRYPTION_KEY`, LiveKit URL/keys, and `CORS_ORIGINS` as deployment environment variables.
+- Point the mobile app at the deployed API by setting `EXPO_PUBLIC_API_URL` in `mobile/.env` before building a release APK/IPA.
+- Free tiers may idle the service; the first request after idle can take tens of seconds to wake.
 
 ## License
 
