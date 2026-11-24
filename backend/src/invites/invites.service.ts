@@ -27,9 +27,15 @@ import { CreateInviteDto } from './dto/invite.dto';
 export class InvitesService {
   private readonly logger = new Logger(InvitesService.name);
 
-  // Roles an admin may hand out via an invite. Admin roles are deliberately excluded so
-  // an invite can never be used to escalate privilege.
-  private static readonly GRANTABLE: Role[] = [Role.FACULTY, Role.HOD, Role.GUEST];
+  // Roles an admin may hand out via an invite, by the inviter's own role. A SUPER_ADMIN can
+  // onboard ministry/institute admins; lower admins cannot grant admin roles (no privilege
+  // escalation). SUPER_ADMIN itself is never grantable via an invite.
+  private static grantableFor(actorRole: Role): Role[] {
+    if (actorRole === Role.SUPER_ADMIN) {
+      return [Role.MINISTRY, Role.INSTITUTE_ADMIN, Role.HOD, Role.FACULTY, Role.GUEST];
+    }
+    return [Role.HOD, Role.FACULTY, Role.GUEST];
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -38,8 +44,9 @@ export class InvitesService {
 
   async create(admin: AuthedUser, dto: CreateInviteDto) {
     const role = dto.role ?? Role.FACULTY;
-    if (!InvitesService.GRANTABLE.includes(role)) {
-      throw new BadRequestException('An invite can only grant FACULTY, HOD or GUEST roles.');
+    const grantable = InvitesService.grantableFor(admin.role);
+    if (!grantable.includes(role)) {
+      throw new BadRequestException(`You can only grant: ${grantable.join(', ')}.`);
     }
 
     // Resolve the target organisation. Non-super-admins are pinned to their own org.

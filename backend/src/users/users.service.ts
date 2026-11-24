@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, Role, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -37,6 +37,46 @@ export class UsersService {
       take: 30,
     });
     return users.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email, role: u.role, orgName: u.org?.name ?? null }));
+  }
+
+  /** Admin: list members of the organisation (all statuses) so access can be managed. */
+  async listMembers(actor: AuthedUser) {
+    if (actor.role !== Role.SUPER_ADMIN && actor.role !== Role.INSTITUTE_ADMIN) {
+      throw new ForbiddenException('Only administrators can view members.');
+    }
+    const crossOrg = actor.role === Role.SUPER_ADMIN;
+    const where: Prisma.UserWhereInput = {
+      id: { not: actor.id },
+      ...(crossOrg ? {} : { orgId: actor.orgId ?? undefined }),
+    };
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true, fullName: true, email: true, role: true, status: true, org: { select: { name: true } } },
+      orderBy: { fullName: 'asc' },
+      take: 300,
+    });
+    return users.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email, role: u.role, status: u.status, orgName: u.org?.name ?? null }));
+  }
+
+  /** Admin: revoke (suspend) or restore a member's access. Suspending revokes their sessions. */
+  async setMemberAccess(actor: AuthedUser, targetId: string, suspend: boolean) {
+    if (actor.role !== Role.SUPER_ADMIN && actor.role !== Role.INSTITUTE_ADMIN) {
+      throw new ForbiddenException('Only administrators can change member access.');
+    }
+    if (targetId === actor.id) throw new ForbiddenException('You cannot change your own access here.');
+    const target = await this.prisma.user.findUnique({ where: { id: targetId } });
+    if (!target) throw new NotFoundException('User not found');
+    if (actor.role !== Role.SUPER_ADMIN && target.orgId !== actor.orgId) {
+      throw new ForbiddenException('That member belongs to another organisation.');
+    }
+    if (target.role === Role.SUPER_ADMIN) throw new ForbiddenException('A super admin cannot be changed here.');
+    const status = suspend ? UserStatus.SUSPENDED : UserStatus.APPROVED;
+    await this.prisma.$transaction([
+      this.prisma.user.update({ where: { id: targetId }, data: { status } }),
+      ...(suspend ? [this.prisma.session.updateMany({ where: { userId: targetId, revokedAt: { isSet: false } }, data: { revokedAt: new Date() } })] : []),
+    ]);
+    await this.audit.log({ actorId: actor.id, action: suspend ? 'MEMBER_ACCESS_REVOKED' : 'MEMBER_ACCESS_RESTORED', targetType: 'User', targetId });
+    return { message: suspend ? 'Access revoked' : 'Access restored', status };
   }
 
   async getProfile(userId: string) {

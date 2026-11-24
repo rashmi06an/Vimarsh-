@@ -33,6 +33,7 @@ export function AdminHomeScreen({ navigation }: Props) {
 
       <Tile icon="qr-code-outline" title="Member invitations" subtitle="Generate one-time QR onboarding codes" onPress={() => navigation.navigate('Invites')} />
       <Tile icon="checkmark-done-outline" title="Registration approvals" subtitle={count > 0 ? `${count} pending` : 'No pending'} onPress={() => navigation.navigate('Approvals')} badge={count} />
+      <Tile icon="people-outline" title="Members & access" subtitle="Revoke or restore member access" onPress={() => navigation.navigate('Members')} />
       <Tile icon="key-outline" title="Password resets" subtitle={resetCount > 0 ? `${resetCount} pending` : 'No pending'} onPress={() => navigation.navigate('PasswordResets')} badge={resetCount} />
       <Tile icon="shield-checkmark-outline" title="Audit log" subtitle="Hash-chained · verify integrity" onPress={() => navigation.navigate('AuditLog')} />
     </Screen>

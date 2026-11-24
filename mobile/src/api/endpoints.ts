@@ -5,6 +5,7 @@ import {
   CreatedInvite,
   Department,
   DirectoryUser,
+  MemberItem,
   InvitationItem,
   InviteListItem,
   InviteValidation,
@@ -58,6 +59,9 @@ export const usersApi = {
   me: () => apiRequest<Profile>('/users/me'),
   directory: (q?: string) =>
     apiRequest<DirectoryUser[]>(`/users/directory${q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`),
+  members: () => apiRequest<MemberItem[]>('/users/members'),
+  suspend: (id: string) => apiRequest<{ message: string; status: string }>(`/users/${id}/suspend`, { method: 'POST' }),
+  restore: (id: string) => apiRequest<{ message: string; status: string }>(`/users/${id}/restore`, { method: 'POST' }),
   updateMe: (body: { fullName?: string; phone?: string; photoUrl?: string }) =>
     apiRequest<Profile>('/users/me', { method: 'PATCH', body }),
   sessions: () => apiRequest<Array<{ id: string; deviceInfo: string | null; createdAt: string; expiresAt: string }>>('/users/me/sessions'),

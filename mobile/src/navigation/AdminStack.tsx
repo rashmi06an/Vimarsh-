@@ -5,6 +5,7 @@ import { AdminStackParams } from './types';
 import { AdminHomeScreen } from '../screens/admin/AdminHomeScreen';
 import { ApprovalsScreen } from '../screens/admin/ApprovalsScreen';
 import { InvitesScreen } from '../screens/admin/InvitesScreen';
+import { MembersScreen } from '../screens/admin/MembersScreen';
 import { PasswordResetsScreen } from '../screens/admin/PasswordResetsScreen';
 import { AuditLogScreen } from '../screens/admin/AuditLogScreen';
 
@@ -24,6 +25,7 @@ export function AdminStack() {
       <Stack.Screen name="AdminHome" component={AdminHomeScreen} options={{ headerShown: false }} />
       <Stack.Screen name="Approvals" component={ApprovalsScreen} options={{ title: 'Approvals' }} />
       <Stack.Screen name="Invites" component={InvitesScreen} options={{ title: 'Member invitations' }} />
+      <Stack.Screen name="Members" component={MembersScreen} options={{ title: 'Members & access' }} />
       <Stack.Screen name="PasswordResets" component={PasswordResetsScreen} options={{ title: 'Password resets' }} />
       <Stack.Screen name="AuditLog" component={AuditLogScreen} options={{ title: 'Audit log' }} />
     </Stack.Navigator>

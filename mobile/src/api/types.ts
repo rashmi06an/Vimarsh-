@@ -7,6 +7,15 @@ export interface DirectoryUser {
   role: Role;
   orgName: string | null;
 }
+
+export interface MemberItem {
+  id: string;
+  fullName: string;
+  email: string;
+  role: Role;
+  status: UserStatus;
+  orgName: string | null;
+}
 export type UserStatus = 'PENDING_OTP' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 
 export interface PublicUser {

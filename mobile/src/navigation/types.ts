@@ -26,6 +26,7 @@ export type AdminStackParams = {
   AdminHome: undefined;
   Approvals: undefined;
   Invites: undefined;
+  Members: undefined;
   PasswordResets: undefined;
   AuditLog: undefined;
 };

@@ -11,9 +11,15 @@ import { colors, radius, spacing } from '../../theme';
 import { t } from '../../i18n';
 import { invitesApi } from '../../api/endpoints';
 import { ApiError } from '../../api/client';
+import { useAuth } from '../../auth/AuthContext';
 import type { CreatedInvite, InviteListItem, InviteState, Role } from '../../api/types';
 
-const ROLES: Role[] = ['FACULTY', 'HOD', 'GUEST'];
+// Roles an admin may grant via an invite, by their own role (mirrors the backend).
+// A super admin can onboard ministry/institute admins; others cannot grant admin roles.
+const grantableRoles = (actorRole?: string): Role[] =>
+  actorRole === 'SUPER_ADMIN'
+    ? ['MINISTRY', 'INSTITUTE_ADMIN', 'HOD', 'FACULTY', 'GUEST']
+    : ['HOD', 'FACULTY', 'GUEST'];
 
 const STATUS_COLOR: Record<InviteState, string> = {
   ACTIVE: colors.success,
@@ -32,6 +38,8 @@ function when(iso: string): string {
 
 export function InvitesScreen() {
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const ROLES = grantableRoles(user?.role);
   const [role, setRole] = useState<Role>('FACULTY');
   const [note, setNote] = useState('');
   const [created, setCreated] = useState<CreatedInvite | null>(null);

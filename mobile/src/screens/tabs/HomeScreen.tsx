@@ -66,7 +66,7 @@ export function HomeScreen() {
           <Pressable key={a.key} style={styles.actionWrap} onPress={() => onQuick(a.key)}>
             <Card style={styles.action}>
               <Ionicons name={a.icon} size={22} color={colors.primary} />
-              <Text variant="label" color={colors.primary} center style={styles.actionLabel}>{a.label}</Text>
+              <Text variant="label" color={colors.primary} center numberOfLines={1} style={styles.actionLabel}>{a.label}</Text>
             </Card>
           </Pressable>
         ))}
@@ -111,10 +111,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 const styles = StyleSheet.create({
   headerRow: { flexDirection: 'row', alignItems: 'flex-start', marginTop: spacing.md, marginBottom: spacing.lg, gap: spacing.sm },
-  actions: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg },
+  actions: { flexDirection: 'row', gap: spacing.xs, marginBottom: spacing.lg },
   actionWrap: { flex: 1 },
-  action: { paddingVertical: spacing.md, alignItems: 'center', gap: 6 },
-  actionLabel: { marginTop: 2 },
+  action: { paddingVertical: spacing.md, paddingHorizontal: spacing.xs, alignItems: 'center', gap: 6 },
+  actionLabel: { marginTop: 2, fontSize: 12 },
   section: { marginBottom: spacing.lg },
   sectionTitle: { marginBottom: spacing.sm, letterSpacing: 0.6 },
   inviteCard: { marginBottom: spacing.sm, gap: 2 },

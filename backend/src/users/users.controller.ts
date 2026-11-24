@@ -33,6 +33,24 @@ export class UsersController {
     return this.users.directory(user, q);
   }
 
+  @Get('members')
+  @ApiOperation({ summary: 'Admin: list organisation members (manage access)' })
+  members(@CurrentUser() user: AuthedUser) {
+    return this.users.listMembers(user);
+  }
+
+  @Post(':id/suspend')
+  @ApiOperation({ summary: 'Admin: revoke a member\'s access' })
+  suspend(@CurrentUser() user: AuthedUser, @Param('id') id: string) {
+    return this.users.setMemberAccess(user, id, true);
+  }
+
+  @Post(':id/restore')
+  @ApiOperation({ summary: 'Admin: restore a member\'s access' })
+  restore(@CurrentUser() user: AuthedUser, @Param('id') id: string) {
+    return this.users.setMemberAccess(user, id, false);
+  }
+
   @Patch('me')
   @ApiOperation({ summary: 'Update my profile' })
   updateMe(@CurrentUser() user: AuthedUser, @Body() dto: UpdateProfileDto) {

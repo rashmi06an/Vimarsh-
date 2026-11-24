@@ -14,6 +14,7 @@ import {
 } from '@livekit/react-native';
 import { Track } from 'livekit-client';
 import * as ScreenCapture from 'expo-screen-capture';
+import { useKeepAwake } from 'expo-keep-awake';
 import type { Socket } from 'socket.io-client';
 import { Text } from '../../components/Text';
 import { colors, radius, spacing } from '../../theme';
@@ -34,6 +35,8 @@ interface Props {
 }
 
 export function RoomView({ meetingId, title, token, url, isHost, onLeave }: Props) {
+  // Keep the screen awake for the whole time the meeting room is on screen.
+  useKeepAwake();
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -273,6 +276,22 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
 
   const endForAll = async () => { try { await roomApi.end(meetingId); } finally { onLeave(); } };
 
+  // Exit options: a host can end the meeting for everyone or just leave; others only leave.
+  const onExit = () => {
+    if (isHost) {
+      Alert.alert('Leave meeting', 'What would you like to do?', [
+        { text: 'End meeting for everyone', style: 'destructive', onPress: endForAll },
+        { text: 'Leave (others stay)', onPress: onLeave },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    } else {
+      Alert.alert('Leave meeting', 'Leave this meeting?', [
+        { text: 'Leave', style: 'destructive', onPress: onLeave },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    }
+  };
+
   const mm = String(Math.floor(elapsed / 60)).padStart(2, '0');
   const ss = String(elapsed % 60).padStart(2, '0');
   const cameraTracks = tracks.filter((t) => isTrackReference(t));
@@ -338,7 +357,7 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
         <Ctrl icon="hand-left" active={handRaised} onPress={toggleHand} />
         <Ctrl icon="chatbubble-ellipses" badge={unread} onPress={() => { setChatOpen(true); setUnread(0); }} />
         <Ctrl icon="people" onPress={() => setPaxOpen(true)} />
-        <Ctrl icon="exit" danger onPress={onLeave} />
+        <Ctrl icon="exit" danger onPress={onExit} />
       </View>
 
       {/* Chat modal */}
