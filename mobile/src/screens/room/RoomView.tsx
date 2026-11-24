@@ -100,10 +100,20 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   const [addMsg, setAddMsg] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
-  // On-device screen recording saved to the phone's gallery (no server upload).
+  // On-device screen recording saved to the phone's gallery (no server upload). The native
+  // recorder is loaded lazily and only when installed, so the app builds/runs even if the
+  // module is absent on a given build.
   const toggleRecording = async () => {
     try {
-      const RecordScreen = (await import('react-native-record-screen')).default;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let RecordScreen: any;
+      try {
+        // Optional native module; resolved by name so a missing package doesn't break typing.
+        RecordScreen = (await import('react-native-record-screen' as string)).default;
+      } catch {
+        Alert.alert('Recording', 'On-device recording is not available on this build yet.');
+        return;
+      }
       const MediaLibrary = await import('expo-media-library');
       if (!recording) {
         const perm = await MediaLibrary.requestPermissionsAsync();
@@ -111,12 +121,12 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
           Alert.alert('Recording', 'Allow photos/media access so the recording can be saved to your gallery.');
           return;
         }
-        await RecordScreen.startRecording({ mic: true }).catch((e: unknown) => { throw e; });
+        await RecordScreen.startRecording({ mic: true });
         setRecording(true);
       } else {
         const res = await RecordScreen.stopRecording();
         setRecording(false);
-        const uri = (res as unknown as { result?: { outputURL?: string } })?.result?.outputURL;
+        const uri = res?.result?.outputURL as string | undefined;
         if (uri) {
           await MediaLibrary.saveToLibraryAsync(uri);
           Alert.alert('Recording saved', 'The meeting recording was saved to your device gallery.');
