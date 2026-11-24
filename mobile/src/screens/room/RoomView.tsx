@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import {
@@ -86,6 +86,12 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   const [waiting, setWaiting] = useState<Array<{ userId: string | null; name: string }>>([]);
   const [unread, setUnread] = useState(0);
   const [recording, setRecording] = useState(false);
+  // Mute policy ("everyone muted; unmute needs host approval").
+  const [muteAllOn, setMuteAllOn] = useState(false);          // host: is the policy on
+  const [mutedByHost, setMutedByHost] = useState(false);      // participant: locked muted
+  const [unmuteAllowed, setUnmuteAllowed] = useState(false);  // participant: granted to unmute
+  const [unmuteRequested, setUnmuteRequested] = useState(false); // participant: request pending
+  const [unmuteReqs, setUnmuteReqs] = useState<Array<{ userId: string; name: string }>>([]); // host
   const socketRef = useRef<Socket | null>(null);
 
   const toggleRecording = async () => {
@@ -102,6 +108,12 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     return () => clearInterval(id);
   }, []);
 
+  // When mute-all is on and a new participant joins, re-assert the policy so late joiners are
+  // muted too (clients that were already granted ignore the re-lock).
+  useEffect(() => {
+    if (isHost && muteAllOn) socketRef.current?.emit('host:mute_all', { meetingId, enabled: true });
+  }, [participants.length, isHost, muteAllOn, meetingId]);
+
   // Socket for chat, host controls and signalling.
   useEffect(() => {
     let socket: Socket | null = null;
@@ -115,6 +127,30 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
       socket.on('meeting:ended', () => onLeave());
       socket.on('meeting:removed', () => onLeave());
       socket.on('host:mute', () => { localParticipant.setMicrophoneEnabled(false); });
+      // Mute-all policy toggled by the host (also re-sent when someone new joins, so late
+      // joiners get muted too — the functional guard keeps already-granted users unmuted).
+      socket.on('room:mute_all', (d: { enabled: boolean }) => {
+        setMuteAllOn(!!d.enabled);
+        if (isHost) return;
+        if (!d.enabled) { setMutedByHost(false); return; }
+        setUnmuteAllowed((allowed) => {
+          if (!allowed) {
+            setMutedByHost(true);
+            setUnmuteRequested(false);
+            localParticipant.setMicrophoneEnabled(false);
+          }
+          return allowed;
+        });
+      });
+      // Host received a participant's request to unmute.
+      socket.on('unmute:request', (r: { userId: string; name: string }) => {
+        if (isHost) setUnmuteReqs((xs) => (xs.find((x) => x.userId === r.userId) ? xs : [...xs, { userId: r.userId, name: r.name }]));
+      });
+      // This participant was granted permission to unmute.
+      socket.on('unmute:granted', () => {
+        setMutedByHost(false); setUnmuteAllowed(true); setUnmuteRequested(false);
+        localParticipant.setMicrophoneEnabled(true);
+      });
       // Raise-hand state is shared over the socket: the server broadcasts participant:hand to
       // everyone in the room (including the sender), so each client mirrors the same map.
       socket.on('participant:hand', (p: { userId: string; raised: boolean }) => {
@@ -155,6 +191,30 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     const next = !handRaised;
     setHandRaised(next);
     socketRef.current?.emit('hand:raise', { meetingId, raised: next });
+  };
+
+  // Host: turn "everyone muted; unmute needs approval" on/off.
+  const toggleMuteAll = () => {
+    const next = !muteAllOn;
+    setMuteAllOn(next);
+    socketRef.current?.emit('host:mute_all', { meetingId, enabled: next });
+  };
+  // Host: grant a specific participant permission to unmute.
+  const allowUnmute = (userId: string) => {
+    socketRef.current?.emit('host:allow_unmute', { meetingId, userId });
+    setUnmuteReqs((xs) => xs.filter((x) => x.userId !== userId));
+  };
+  // Participant: either normal toggle, or (when locked) send a request to unmute.
+  const onMicPress = () => {
+    if (!isHost && mutedByHost && !unmuteAllowed) {
+      if (!unmuteRequested) {
+        setUnmuteRequested(true);
+        socketRef.current?.emit('unmute:request', { meetingId });
+      }
+      Alert.alert('Microphone', 'The host has muted everyone. Your request to unmute has been sent — you can speak once the host allows it.');
+      return;
+    }
+    localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled);
   };
 
   const [sharingScreen, setSharingScreen] = useState(false);
@@ -270,10 +330,11 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
 
       {/* Controls */}
       <View style={styles.controls}>
-        <Ctrl icon={isMicrophoneEnabled ? 'mic' : 'mic-off'} active={isMicrophoneEnabled} onPress={() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} />
+        <Ctrl icon={isMicrophoneEnabled ? 'mic' : 'mic-off'} active={isMicrophoneEnabled} onPress={onMicPress} />
         <Ctrl icon={isCameraEnabled ? 'videocam' : 'videocam-off'} active={isCameraEnabled} onPress={() => localParticipant.setCameraEnabled(!isCameraEnabled)} />
         <Ctrl icon="camera-reverse" onPress={flipCamera} />
         <Ctrl icon={sharingScreen ? 'stop-circle' : 'tv-outline'} active={sharingScreen} onPress={toggleScreenShare} />
+        {isHost && <Ctrl icon={muteAllOn ? 'volume-mute' : 'volume-high'} active={muteAllOn} onPress={toggleMuteAll} />}
         <Ctrl icon="hand-left" active={handRaised} onPress={toggleHand} />
         <Ctrl icon="chatbubble-ellipses" badge={unread} onPress={() => { setChatOpen(true); setUnread(0); }} />
         <Ctrl icon="people" onPress={() => setPaxOpen(true)} />
@@ -282,7 +343,10 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
 
       {/* Chat modal */}
       <Modal visible={chatOpen} animationType="slide" transparent onRequestClose={() => setChatOpen(false)}>
-        <View style={styles.modalWrap}>
+        <KeyboardAvoidingView
+          style={styles.modalWrap}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={styles.sheet}>
             <SheetHeader title="Chat" onClose={() => setChatOpen(false)} />
             <FlatList
@@ -302,7 +366,7 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
               <Pressable style={styles.sendBtn} onPress={sendChat}><Ionicons name="send" size={18} color="#fff" /></Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Participants / waiting room modal */}
@@ -318,6 +382,17 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
                     <Text variant="body" style={{ flex: 1 }}>{w.name}</Text>
                     <Pressable style={styles.admitBtn} onPress={() => admit(w.userId)}><Text variant="label" color="#fff">Admit</Text></Pressable>
                     <Pressable style={styles.denyBtn} onPress={() => deny(w.userId)}><Text variant="label" color={colors.danger}>Deny</Text></Pressable>
+                  </View>
+                ))}
+              </View>
+            )}
+            {isHost && unmuteReqs.length > 0 && (
+              <View style={styles.waitingSection}>
+                <Text variant="label" color={colors.textMuted}>REQUESTS TO UNMUTE</Text>
+                {unmuteReqs.map((r) => (
+                  <View key={r.userId} style={styles.paxRow}>
+                    <Text variant="body" style={{ flex: 1 }}>{r.name}</Text>
+                    <Pressable style={styles.admitBtn} onPress={() => allowUnmute(r.userId)}><Text variant="label" color="#fff">Allow</Text></Pressable>
                   </View>
                 ))}
               </View>

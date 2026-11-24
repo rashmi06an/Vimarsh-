@@ -10,6 +10,7 @@ import { Button } from '../../components/Button';
 import { colors, spacing } from '../../theme';
 import { t } from '../../i18n';
 import { ApiError } from '../../api/client';
+import { BUILD_TAG } from '../../config/env';
 import { useAuth } from '../../auth/AuthContext';
 import type { AuthStackParams } from '../../navigation/types';
 
@@ -64,6 +65,7 @@ export function LoginScreen({ navigation }: Props) {
       <Button title={t('login.forgot')} variant="ghost" onPress={() => navigation.navigate('ForgotPassword')} />
       <View style={styles.divider} />
       <Button title={t('login.noAccount')} variant="outline" onPress={() => navigation.navigate('Register')} />
+      <Text variant="caption" color={colors.textSubtle} center style={styles.build}>{BUILD_TAG}</Text>
     </Screen>
   );
 }
@@ -74,4 +76,5 @@ const styles = StyleSheet.create({
   sub: { marginTop: spacing.sm },
   err: { marginBottom: spacing.md },
   divider: { height: spacing.lg },
+  build: { marginTop: spacing.xl },
 });

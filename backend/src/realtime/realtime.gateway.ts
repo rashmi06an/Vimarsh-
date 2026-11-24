@@ -91,6 +91,43 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     this.server.to(`meeting:${body.meetingId}`).emit('participant:hand', { userId: user.id, raised: !!body.raised });
   }
 
+  // ---- Mute policy: "mute all + require approval to unmute" ----
+
+  // Host turns on/off "everyone muted". Participants force-mute and cannot unmute until granted.
+  @SubscribeMessage('host:mute_all')
+  async onMuteAll(@ConnectedSocket() socket: Socket, @MessageBody() body: { meetingId: string; enabled: boolean }): Promise<void> {
+    const user = socket.data.user as SocketUser | undefined;
+    if (!user || !body?.meetingId) return;
+    if (!(await this.isMeetingHost(body.meetingId, user))) return;
+    this.server.to(`meeting:${body.meetingId}`).emit('room:mute_all', { meetingId: body.meetingId, enabled: !!body.enabled });
+  }
+
+  // A participant asks the host for permission to unmute.
+  @SubscribeMessage('unmute:request')
+  async onUnmuteRequest(@ConnectedSocket() socket: Socket, @MessageBody() body: { meetingId: string }): Promise<void> {
+    const user = socket.data.user as SocketUser | undefined;
+    if (!user || !body?.meetingId) return;
+    const meeting = await this.prisma.meeting.findUnique({ where: { id: body.meetingId }, select: { hostId: true } });
+    if (!meeting) return;
+    const profile = await this.prisma.user.findUnique({ where: { id: user.id }, select: { fullName: true } });
+    this.server.to(`user:${meeting.hostId}`).emit('unmute:request', { meetingId: body.meetingId, userId: user.id, name: profile?.fullName ?? 'User' });
+  }
+
+  // Host grants a specific participant permission to unmute.
+  @SubscribeMessage('host:allow_unmute')
+  async onAllowUnmute(@ConnectedSocket() socket: Socket, @MessageBody() body: { meetingId: string; userId: string }): Promise<void> {
+    const user = socket.data.user as SocketUser | undefined;
+    if (!user || !body?.meetingId || !body?.userId) return;
+    if (!(await this.isMeetingHost(body.meetingId, user))) return;
+    this.server.to(`user:${body.userId}`).emit('unmute:granted', { meetingId: body.meetingId });
+  }
+
+  private async isMeetingHost(meetingId: string, user: SocketUser): Promise<boolean> {
+    if (user.role === 'SUPER_ADMIN') return true;
+    const m = await this.prisma.meeting.findUnique({ where: { id: meetingId }, select: { hostId: true } });
+    return !!m && m.hostId === user.id;
+  }
+
   private async isActiveParticipant(meetingId: string, userId: string): Promise<boolean> {
     const meeting = await this.prisma.meeting.findUnique({ where: { id: meetingId }, select: { hostId: true } });
     if (meeting?.hostId === userId) return true;

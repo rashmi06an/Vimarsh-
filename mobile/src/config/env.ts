@@ -35,3 +35,6 @@ export const API_BASE_URL = explicit && explicit.length > 0
   : deriveFromDevHost() ?? `http://localhost:${API_PORT}`;
 
 export const WS_BASE_URL = API_BASE_URL;
+
+// Human-visible build marker so it's unambiguous which APK is installed. Bump on every release.
+export const BUILD_TAG = 'v1.0.1 · build 7 · mute+chat';
