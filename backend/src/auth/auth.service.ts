@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
-import { InviteStatus, OtpPurpose, Prisma, UserStatus } from '@prisma/client';
+import { InviteStatus, OtpPurpose, Prisma, Role, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
 import { AuditService } from '../audit/audit.service';
@@ -21,6 +21,7 @@ import {
   LoginDto,
   OrgVerificationDto,
   RegisterDto,
+  RequestAccessDto,
   ResetPasswordDto,
   VerifyOtpDto,
 } from './dto/auth.dto';
@@ -48,6 +49,34 @@ export class AuthService {
   ) {}
 
   // ---------------- Registration + OTP ----------------
+
+  /**
+   * A prospective member (no account yet) asks for an invitation code. We notify every
+   * administrator in-app so they can issue a code from the Invites screen if the person is
+   * allowed in. Response is uniform regardless of outcome (no account enumeration).
+   */
+  async requestAccess(dto: RequestAccessDto): Promise<{ message: string }> {
+    const email = dto.email.toLowerCase().trim();
+    const fullName = dto.fullName.trim();
+    const admins = await this.prisma.user.findMany({
+      where: { role: { in: [Role.SUPER_ADMIN, Role.INSTITUTE_ADMIN] }, status: UserStatus.APPROVED },
+      select: { id: true },
+    });
+    if (admins.length > 0) {
+      const body = `${fullName} (${email}) is requesting an invitation code.${dto.note ? ` Note: ${dto.note.trim()}` : ''}`;
+      await this.prisma.notification.createMany({
+        data: admins.map((a) => ({
+          userId: a.id,
+          type: 'ACCESS_REQUEST',
+          title: 'Access request',
+          body,
+          data: { email, fullName, note: dto.note ?? null } as object,
+        })),
+      });
+    }
+    await this.audit.log({ actorId: 'anonymous', action: 'ACCESS_REQUESTED', targetType: 'User', targetId: email });
+    return { message: 'Your request has been sent to the administrators. You will receive a code if approved.' };
+  }
 
   /**
    * Admin-controlled, QR-based registration. There is NO email or OTP here.

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
+import { scheduleMeetingReminders } from '../../realtime/reminders';
 import { Screen } from '../../components/Screen';
 import { Text } from '../../components/Text';
 import { Card } from '../../components/Card';
@@ -23,7 +24,7 @@ const QUICK: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap 
   { key: 'history', label: 'History', icon: 'time-outline' },
 ];
 
-const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD', 'FACULTY'];
+const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD', 'FACULTY', 'GUEST'];
 
 export function HomeScreen() {
   const { user } = useAuth();
@@ -38,6 +39,12 @@ export function HomeScreen() {
   useFocusEffect(React.useCallback(() => {
     upcoming.refetch(); ongoing.refetch(); invites.refetch();
   }, []));
+
+  // Schedule a local reminder 1 minute before each upcoming meeting.
+  React.useEffect(() => {
+    const rows = upcoming.data ?? [];
+    void scheduleMeetingReminders(rows.map((m) => ({ id: m.id, title: m.title, startAt: m.startAt })));
+  }, [upcoming.data]);
 
   const onQuick = (key: string) => {
     switch (key) {

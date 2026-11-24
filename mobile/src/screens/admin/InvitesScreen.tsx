@@ -157,7 +157,7 @@ const styles = StyleSheet.create({
   subtitle: { marginTop: spacing.sm, marginBottom: spacing.md },
   block: { marginBottom: spacing.md },
   gap: { height: spacing.sm },
-  chips: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
   chip: {
     paddingVertical: 6,
     paddingHorizontal: spacing.md,

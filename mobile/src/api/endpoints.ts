@@ -34,6 +34,10 @@ export const authApi = {
   register: (body: { inviteToken: string; email: string; fullName: string; password: string; phone?: string }) =>
     apiRequest<RegisterResponse>('/auth/register', { method: 'POST', body, auth: false }),
 
+  // Prospective member asks an admin for an invitation code (no account yet).
+  requestAccess: (body: { fullName: string; email: string; note?: string }) =>
+    apiRequest<{ message: string }>('/auth/request-access', { method: 'POST', body, auth: false }),
+
   verifyOtp: (body: { email: string; code: string }) =>
     apiRequest<VerifyOtpResponse>('/auth/verify-otp', { method: 'POST', body, auth: false }),
 

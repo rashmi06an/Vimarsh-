@@ -13,13 +13,12 @@ import {
   registerGlobals,
 } from '@livekit/react-native';
 import { Track } from 'livekit-client';
-import * as ScreenCapture from 'expo-screen-capture';
 import { useKeepAwake } from 'expo-keep-awake';
 import type { Socket } from 'socket.io-client';
 import { Text } from '../../components/Text';
 import { colors, radius, spacing } from '../../theme';
 import { connectMeetingSocket, ChatMessage } from '../../realtime/socket';
-import { roomApi, recordingsApi } from '../../api/endpoints';
+import { roomApi, usersApi, meetingsApi } from '../../api/endpoints';
 import { Alert } from 'react-native';
 
 // Register WebRTC globals once (requires a development build; no-op-safe to call once).
@@ -41,13 +40,12 @@ export function RoomView({ meetingId, title, token, url, isHost, onLeave }: Prop
     let mounted = true;
     (async () => {
       await AudioSession.startAudioSession();
-      // Block screenshots/screen recording of confidential meeting content (FLAG_SECURE on
-      // Android, which also hides the content in the app switcher; screenshot block on iOS).
-      try { await ScreenCapture.preventScreenCaptureAsync('vimarsh-room'); } catch { /* best effort */ }
+      // NOTE: screen-capture blocking (FLAG_SECURE) is intentionally NOT enabled, because it
+      // would make on-device meeting recording capture a black screen. In-meeting recording is
+      // the product requirement here, so capture is allowed.
     })();
     return () => {
       if (mounted) AudioSession.stopAudioSession();
-      ScreenCapture.allowScreenCaptureAsync('vimarsh-room').catch(() => undefined);
       mounted = false;
     };
   }, []);
@@ -95,14 +93,40 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   const [unmuteAllowed, setUnmuteAllowed] = useState(false);  // participant: granted to unmute
   const [unmuteRequested, setUnmuteRequested] = useState(false); // participant: request pending
   const [unmuteReqs, setUnmuteReqs] = useState<Array<{ userId: string; name: string }>>([]); // host
+  // Add-participant-during-meeting (host).
+  const [addOpen, setAddOpen] = useState(false);
+  const [addSearch, setAddSearch] = useState('');
+  const [addResults, setAddResults] = useState<Array<{ id: string; fullName: string; email: string }>>([]);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
+  // On-device screen recording saved to the phone's gallery (no server upload).
   const toggleRecording = async () => {
     try {
-      if (recording) { await recordingsApi.stop(meetingId); setRecording(false); }
-      else { await recordingsApi.start(meetingId); setRecording(true); }
+      const RecordScreen = (await import('react-native-record-screen')).default;
+      const MediaLibrary = await import('expo-media-library');
+      if (!recording) {
+        const perm = await MediaLibrary.requestPermissionsAsync();
+        if (!perm.granted) {
+          Alert.alert('Recording', 'Allow photos/media access so the recording can be saved to your gallery.');
+          return;
+        }
+        await RecordScreen.startRecording({ mic: true }).catch((e: unknown) => { throw e; });
+        setRecording(true);
+      } else {
+        const res = await RecordScreen.stopRecording();
+        setRecording(false);
+        const uri = (res as unknown as { result?: { outputURL?: string } })?.result?.outputURL;
+        if (uri) {
+          await MediaLibrary.saveToLibraryAsync(uri);
+          Alert.alert('Recording saved', 'The meeting recording was saved to your device gallery.');
+        } else {
+          Alert.alert('Recording', 'Recording stopped, but no file was produced.');
+        }
+      }
     } catch (e) {
-      Alert.alert('Recording', (e as Error).message || 'Could not change recording state.');
+      setRecording(false);
+      Alert.alert('Recording', (e as Error).message || 'Could not record the screen on this device.');
     }
   };
 
@@ -233,27 +257,6 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     }
   };
 
-  const [facing, setFacing] = useState<'user' | 'environment'>('user');
-  const flipCamera = async () => {
-    try {
-      const pub = localParticipant.getTrackPublication(Track.Source.Camera)
-        ?? [...localParticipant.videoTrackPublications.values()].find((p) => p.source === Track.Source.Camera);
-      const track = (pub as unknown as { videoTrack?: unknown })?.videoTrack ?? pub?.track;
-      if (!track || !isCameraEnabled) {
-        Alert.alert('Camera', 'Turn your camera on first to switch between front and back.');
-        return;
-      }
-      const next = facing === 'user' ? 'environment' : 'user';
-      // LiveKit's own track restart is the reliable cross-device way to switch facing mode on
-      // React Native; the raw _switchCamera() on the native track often does not update the
-      // published stream.
-      await (track as unknown as { restartTrack: (o: { facingMode: 'user' | 'environment' }) => Promise<void> })
-        .restartTrack({ facingMode: next });
-      setFacing(next);
-    } catch (e) {
-      Alert.alert('Camera', (e as Error).message || 'Could not switch camera.');
-    }
-  };
 
   const admit = async (userId: string | null) => {
     if (!userId) return;
@@ -275,6 +278,24 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   };
 
   const endForAll = async () => { try { await roomApi.end(meetingId); } finally { onLeave(); } };
+
+  // Host: search registered members and invite one mid-meeting (they join via the waiting room).
+  const searchToAdd = async (q: string) => {
+    setAddSearch(q);
+    try {
+      const r = await usersApi.directory(q);
+      setAddResults(r.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email })));
+    } catch { /* ignore */ }
+  };
+  const addParticipant = async (u: { id: string; fullName: string }) => {
+    try {
+      await meetingsApi.invite(meetingId, [{ userId: u.id }]);
+      setAddMsg(`${u.fullName} invited — they can now join via the waiting room.`);
+      setAddResults([]); setAddSearch('');
+    } catch (e) {
+      setAddMsg((e as Error).message || 'Could not add participant.');
+    }
+  };
 
   // Exit options: a host can end the meeting for everyone or just leave; others only leave.
   const onExit = () => {
@@ -351,12 +372,10 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
       <View style={styles.controls}>
         <Ctrl icon={isMicrophoneEnabled ? 'mic' : 'mic-off'} active={isMicrophoneEnabled} onPress={onMicPress} />
         <Ctrl icon={isCameraEnabled ? 'videocam' : 'videocam-off'} active={isCameraEnabled} onPress={() => localParticipant.setCameraEnabled(!isCameraEnabled)} />
-        <Ctrl icon="camera-reverse" onPress={flipCamera} />
         <Ctrl icon={sharingScreen ? 'stop-circle' : 'tv-outline'} active={sharingScreen} onPress={toggleScreenShare} />
-        {isHost && <Ctrl icon={muteAllOn ? 'volume-mute' : 'volume-high'} active={muteAllOn} onPress={toggleMuteAll} />}
         <Ctrl icon="hand-left" active={handRaised} onPress={toggleHand} />
         <Ctrl icon="chatbubble-ellipses" badge={unread} onPress={() => { setChatOpen(true); setUnread(0); }} />
-        <Ctrl icon="people" onPress={() => setPaxOpen(true)} />
+        {isHost && <Ctrl icon="people" onPress={() => setPaxOpen(true)} />}
         <Ctrl icon="exit" danger onPress={onExit} />
       </View>
 
@@ -393,6 +412,33 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
         <View style={styles.modalWrap}>
           <View style={styles.sheet}>
             <SheetHeader title="Participants" onClose={() => setPaxOpen(false)} />
+            {isHost && (
+              <View style={styles.hostTools}>
+                <Pressable style={[styles.toolBtn, muteAllOn && styles.toolBtnActive]} onPress={toggleMuteAll}>
+                  <Ionicons name={muteAllOn ? 'volume-mute' : 'volume-high'} size={16} color={muteAllOn ? '#fff' : colors.primary} />
+                  <Text variant="caption" color={muteAllOn ? '#fff' : colors.primary}>{muteAllOn ? 'Everyone muted' : 'Mute everyone'}</Text>
+                </Pressable>
+                <Pressable style={styles.toolBtn} onPress={() => { setAddOpen((v) => !v); setAddMsg(null); }}>
+                  <Ionicons name="person-add-outline" size={16} color={colors.primary} />
+                  <Text variant="caption" color={colors.primary}>Add participant</Text>
+                </Pressable>
+              </View>
+            )}
+            {isHost && addOpen && (
+              <View style={styles.addBox}>
+                <TextInput style={styles.chatInput} value={addSearch} onChangeText={searchToAdd} placeholder="Search members by name or email" placeholderTextColor={colors.textSubtle} autoCapitalize="none" />
+                {!!addMsg && <Text variant="caption" color={colors.success} style={{ marginTop: 6 }}>{addMsg}</Text>}
+                {addResults.map((u) => (
+                  <Pressable key={u.id} style={styles.paxRow} onPress={() => addParticipant(u)}>
+                    <View style={{ flex: 1 }}>
+                      <Text variant="body" numberOfLines={1}>{u.fullName}</Text>
+                      <Text variant="caption" color={colors.textMuted} numberOfLines={1}>{u.email}</Text>
+                    </View>
+                    <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
+                  </Pressable>
+                ))}
+              </View>
+            )}
             {isHost && waiting.length > 0 && (
               <View style={styles.waitingSection}>
                 <Text variant="label" color={colors.textMuted}>WAITING ROOM</Text>
@@ -472,9 +518,13 @@ const styles = StyleSheet.create({
   videoOff: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.roomSurface },
   nameTag: { position: 'absolute', left: 8, bottom: 8, backgroundColor: 'rgba(0,0,0,0.5)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   handBadge: { position: 'absolute', right: 8, top: 8, width: 28, height: 28, borderRadius: 14, backgroundColor: '#F4B740', alignItems: 'center', justifyContent: 'center' },
-  controls: { flexDirection: 'row', justifyContent: 'space-around', alignItems: 'center', paddingVertical: spacing.md, paddingHorizontal: spacing.sm, backgroundColor: colors.roomSurface, borderTopColor: colors.roomBorder, borderTopWidth: 1 },
+  controls: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: spacing.sm, rowGap: spacing.sm, paddingVertical: spacing.md, paddingHorizontal: spacing.sm, backgroundColor: colors.roomSurface, borderTopColor: colors.roomBorder, borderTopWidth: 1 },
   ctrl: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.roomBorder },
   ctrlActive: { backgroundColor: '#fff' },
+  hostTools: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.sm },
+  toolBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: colors.primary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 6 },
+  toolBtnActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  addBox: { marginTop: spacing.sm, gap: 4 },
   ctrlDanger: { backgroundColor: colors.danger },
   ctrlBadge: { position: 'absolute', top: -2, right: -2, minWidth: 16, height: 16, borderRadius: 8, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3 },
   modalWrap: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },

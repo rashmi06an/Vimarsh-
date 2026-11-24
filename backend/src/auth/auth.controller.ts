@@ -11,6 +11,7 @@ import {
   OrgVerificationDto,
   RefreshDto,
   RegisterDto,
+  RequestAccessDto,
   ResendOtpDto,
   ResetPasswordDto,
   VerifyOtpDto,
@@ -27,6 +28,14 @@ export class AuthController {
   @ApiOperation({ summary: 'Register a new user (always starts as unverified GUEST)' })
   register(@Body() dto: RegisterDto) {
     return this.auth.register(dto);
+  }
+
+  @Public()
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @Post('request-access')
+  @ApiOperation({ summary: 'Prospective member asks an admin for an invitation code' })
+  requestAccess(@Body() dto: RequestAccessDto) {
+    return this.auth.requestAccess(dto);
   }
 
   @Public()

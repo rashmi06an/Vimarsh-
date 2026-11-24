@@ -35,6 +35,29 @@ export function RegisterScreen({ navigation, route }: Props) {
   const [loading, setLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [invite, setInvite] = useState<InviteValidation | null>(null);
+  // "Ask for a code" flow (prospective member with no invite yet).
+  const [reqOpen, setReqOpen] = useState(false);
+  const [reqNote, setReqNote] = useState('');
+  const [reqMsg, setReqMsg] = useState<string | null>(null);
+  const [reqLoading, setReqLoading] = useState(false);
+
+  const requestCode = async () => {
+    if (!fullName.trim() || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setReqMsg('Enter your name and a valid email above first.');
+      return;
+    }
+    setReqLoading(true);
+    setReqMsg(null);
+    try {
+      const res = await authApi.requestAccess({ fullName: fullName.trim(), email: email.trim().toLowerCase(), note: reqNote.trim() || undefined });
+      setReqMsg(res.message);
+      setReqOpen(false);
+    } catch (e) {
+      setReqMsg(e instanceof ApiError ? e.message : 'Could not send your request. Please try again.');
+    } finally {
+      setReqLoading(false);
+    }
+  };
 
   // Pre-check the code so the member sees what they're joining before filling the form.
   const checkInvite = async (raw: string) => {
@@ -110,6 +133,22 @@ export function RegisterScreen({ navigation, route }: Props) {
       />
       <Button title={t('register.scan')} variant="outline" onPress={() => setScanning(true)} />
 
+      <Button
+        title={reqOpen ? 'Hide code request' : "Don't have a code? Ask an admin"}
+        variant="ghost"
+        onPress={() => { setReqOpen((v) => !v); setReqMsg(null); }}
+      />
+      {reqOpen && (
+        <View style={styles.reqBox}>
+          <Text variant="caption" color={colors.textMuted}>
+            Enter your name and email above, then send a request. An admin will be notified and can issue you a code.
+          </Text>
+          <TextField label="Note to admin (optional)" value={reqNote} onChangeText={setReqNote} placeholder="e.g. Faculty, CSE at IIT Delhi" autoCapitalize="sentences" />
+          <Button title="Send request" variant="accent" onPress={requestCode} loading={reqLoading} />
+        </View>
+      )}
+      {!!reqMsg && <Text variant="caption" color={colors.primary} style={styles.reqMsg}>{reqMsg}</Text>}
+
       {invite?.valid && (
         <View style={styles.inviteBanner}>
           <Text variant="caption" color={colors.success ?? colors.primary}>
@@ -151,4 +190,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceAlt,
   },
   err: { marginBottom: spacing.md },
+  reqBox: { gap: spacing.sm, marginTop: spacing.sm, padding: spacing.md, backgroundColor: colors.surfaceAlt, borderRadius: radius.md },
+  reqMsg: { marginTop: spacing.sm },
 });

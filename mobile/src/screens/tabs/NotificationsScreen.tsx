@@ -21,6 +21,7 @@ const iconFor: Record<string, keyof typeof Ionicons.glyphMap> = {
   APPROVAL_GRANTED: 'checkmark-circle-outline',
   APPROVAL_REJECTED: 'close-circle-outline',
   WAITING_ROOM_ADMITTED: 'enter-outline',
+  ACCESS_REQUEST: 'person-add-outline',
   SECURITY_EVENT: 'shield-outline',
 };
 

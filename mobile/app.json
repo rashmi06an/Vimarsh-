@@ -3,7 +3,7 @@
     "name": "AICTE Vimarsh",
     "slug": "vimarsh",
     "scheme": "vimarsh",
-    "version": "1.0.3",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "org.aicte.vimarsh",
-      "versionCode": 4,
+      "versionCode": 6,
       "adaptiveIcon": {
         "backgroundColor": "#1B2F5B",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -56,7 +56,9 @@
       "@react-native-community/datetimepicker",
       [
         "@livekit/react-native-expo-plugin",
-        { "enableScreenShareService": true }
+        {
+          "enableScreenShareService": true
+        }
       ],
       "@config-plugins/react-native-webrtc",
       [
@@ -73,7 +75,14 @@
           "cameraPermission": "AICTE Vimarsh uses the camera to scan your invitation QR code during sign-up."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-media-library",
+        {
+          "savePhotosPermission": "AICTE Vimarsh saves meeting recordings to your gallery.",
+          "isAccessMediaLocationEnabled": false
+        }
+      ]
     ],
     "extra": {
       "eas": {

@@ -14,6 +14,25 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 // Passwords: min 8, must contain letter + number. (Clear, enforced server-side.)
 const PASSWORD_REGEX = /^(?=.*[A-Za-z])(?=.*\d).{8,}$/;
 
+// A prospective member asks an admin for an invitation code (public, no account yet).
+export class RequestAccessDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  fullName!: string;
+
+  @ApiProperty()
+  @IsEmail()
+  email!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string;
+}
+
 export class RegisterDto {
   @ApiProperty({ example: 'ABCD-EFGH-JKLM-NPQR', description: 'Single-use invite code from an admin (scanned QR or typed)' })
   @IsString()
