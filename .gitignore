@@ -29,3 +29,4 @@ backend/src/generated/
 *.log
 .idea/
 .vscode/
+STUDENT.md
