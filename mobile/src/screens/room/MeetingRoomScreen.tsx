@@ -56,14 +56,20 @@ export function MeetingRoomScreen({ route, navigation }: Props) {
     navigation.goBack();
   }, [navigation]);
 
-  const fetchTokenAndJoin = useCallback(async () => {
+  const fetchTokenAndJoin = useCallback(async (silent = false): Promise<boolean> => {
     try {
       const info = await roomApi.token(meetingId);
       setJoinInfo(info);
       setPhase('joined');
+      return true;
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not join');
-      setPhase('error');
+      // silent = triggered by the admitted-event / poll: a transient "not admitted yet" during
+      // the admit race must NOT bounce the user to an error screen — the poll will retry.
+      if (!silent) {
+        setError(err instanceof ApiError ? err.message : 'Could not join');
+        setPhase('error');
+      }
+      return false;
     }
   }, [meetingId]);
 
@@ -79,7 +85,7 @@ export function MeetingRoomScreen({ route, navigation }: Props) {
         // Listen for admission over the socket.
         const socket = await connectMeetingSocket(meetingId);
         socketRef.current = socket;
-        socket.on('waiting:admitted', () => fetchTokenAndJoin());
+        socket.on('waiting:admitted', () => fetchTokenAndJoin(true));
         socket.on('waiting:denied', () => { setError('The host denied your request to join.'); setPhase('error'); });
         socket.on('meeting:ended', () => { setError('The meeting has ended.'); setPhase('error'); });
       }
@@ -100,17 +106,9 @@ export function MeetingRoomScreen({ route, navigation }: Props) {
   // participant actually joins instead of being stuck in the waiting room forever.
   useEffect(() => {
     if (phase !== 'waiting') return;
-    const iv = setInterval(async () => {
-      try {
-        const info = await roomApi.token(meetingId);
-        setJoinInfo(info);
-        setPhase('joined');
-      } catch {
-        // Still not admitted yet — keep waiting.
-      }
-    }, 3000);
+    const iv = setInterval(() => { void fetchTokenAndJoin(true); }, 3000);
     return () => clearInterval(iv);
-  }, [phase, meetingId]);
+  }, [phase, meetingId, fetchTokenAndJoin]);
 
   useEffect(() => {
     (async () => {

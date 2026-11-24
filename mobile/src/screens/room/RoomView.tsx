@@ -130,10 +130,18 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     return () => { socket?.close(); };
   }, [meetingId]);
 
-  // Load current waiting list for host.
+  // Keep the host's waiting list current. Load immediately, then refresh on a timer so people
+  // who knocked BEFORE the host joined (and any the socket event missed) always appear.
   useEffect(() => {
     if (!isHost) return;
-    roomApi.waiting(meetingId).then((w) => setWaiting(w.map((x) => ({ userId: x.userId, name: x.name })))).catch(() => undefined);
+    let active = true;
+    const load = () =>
+      roomApi.waiting(meetingId)
+        .then((w) => { if (active) setWaiting(w.map((x) => ({ userId: x.userId, name: x.name }))); })
+        .catch(() => undefined);
+    load();
+    const iv = setInterval(load, 5000);
+    return () => { active = false; clearInterval(iv); };
   }, [isHost, meetingId]);
 
   const sendChat = () => {
