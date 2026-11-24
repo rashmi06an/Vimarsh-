@@ -162,22 +162,23 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     }
   };
 
+  const [facing, setFacing] = useState<'user' | 'environment'>('user');
   const flipCamera = async () => {
     try {
       const pub = localParticipant.getTrackPublication(Track.Source.Camera)
         ?? [...localParticipant.videoTrackPublications.values()].find((p) => p.source === Track.Source.Camera);
-      const track = pub?.track;
-      if (!track) {
+      const track = (pub as unknown as { videoTrack?: unknown })?.videoTrack ?? pub?.track;
+      if (!track || !isCameraEnabled) {
         Alert.alert('Camera', 'Turn your camera on first to switch between front and back.');
         return;
       }
-      // Preferred on React Native: the native WebRTC track exposes an instant _switchCamera().
-      const mst = (track as unknown as { mediaStreamTrack?: { _switchCamera?: () => void } }).mediaStreamTrack;
-      if (mst?._switchCamera) { mst._switchCamera(); return; }
-      // Fallback: restart the camera track on the opposite facing mode.
-      const current = (track as unknown as { constraints?: { facingMode?: string } }).constraints?.facingMode;
+      const next = facing === 'user' ? 'environment' : 'user';
+      // LiveKit's own track restart is the reliable cross-device way to switch facing mode on
+      // React Native; the raw _switchCamera() on the native track often does not update the
+      // published stream.
       await (track as unknown as { restartTrack: (o: { facingMode: 'user' | 'environment' }) => Promise<void> })
-        .restartTrack({ facingMode: current === 'environment' ? 'user' : 'environment' });
+        .restartTrack({ facingMode: next });
+      setFacing(next);
     } catch (e) {
       Alert.alert('Camera', (e as Error).message || 'Could not switch camera.');
     }
@@ -185,11 +186,21 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
 
   const admit = async (userId: string | null) => {
     if (!userId) return;
-    try { await roomApi.admit(meetingId, userId); setWaiting((w) => w.filter((x) => x.userId !== userId)); } catch { /* ignore */ }
+    try {
+      await roomApi.admit(meetingId, userId);
+      setWaiting((w) => w.filter((x) => x.userId !== userId));
+    } catch (e) {
+      Alert.alert('Admit', (e as Error).message || 'Could not admit this participant.');
+    }
   };
   const deny = async (userId: string | null) => {
     if (!userId) return;
-    try { await roomApi.deny(meetingId, userId); setWaiting((w) => w.filter((x) => x.userId !== userId)); } catch { /* ignore */ }
+    try {
+      await roomApi.deny(meetingId, userId);
+      setWaiting((w) => w.filter((x) => x.userId !== userId));
+    } catch (e) {
+      Alert.alert('Deny', (e as Error).message || 'Could not deny this participant.');
+    }
   };
 
   const endForAll = async () => { try { await roomApi.end(meetingId); } finally { onLeave(); } };

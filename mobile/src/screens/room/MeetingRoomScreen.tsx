@@ -95,6 +95,23 @@ export function MeetingRoomScreen({ route, navigation }: Props) {
     }
   }, [meetingId, fetchTokenAndJoin]);
 
+  // Robustness: while waiting, poll for admission over REST as well. The socket event
+  // (waiting:admitted) can be missed on flaky mobile networks; polling guarantees an admitted
+  // participant actually joins instead of being stuck in the waiting room forever.
+  useEffect(() => {
+    if (phase !== 'waiting') return;
+    const iv = setInterval(async () => {
+      try {
+        const info = await roomApi.token(meetingId);
+        setJoinInfo(info);
+        setPhase('joined');
+      } catch {
+        // Still not admitted yet — keep waiting.
+      }
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [phase, meetingId]);
+
   useEffect(() => {
     (async () => {
       const granted = await ensureMediaPermissions();
