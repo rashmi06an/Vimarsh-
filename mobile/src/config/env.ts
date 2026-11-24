@@ -37,4 +37,4 @@ export const API_BASE_URL = explicit && explicit.length > 0
 export const WS_BASE_URL = API_BASE_URL;
 
 // Human-visible build marker so it's unambiguous which APK is installed. Bump on every release.
-export const BUILD_TAG = 'v1.0.5 · build 12';
+export const BUILD_TAG = 'v1.0.7 · build 14';

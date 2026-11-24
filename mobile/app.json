@@ -3,7 +3,7 @@
     "name": "AICTE Vimarsh",
     "slug": "vimarsh",
     "scheme": "vimarsh",
-    "version": "1.0.5",
+    "version": "1.0.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "org.aicte.vimarsh",
-      "versionCode": 6,
+      "versionCode": 8,
       "adaptiveIcon": {
         "backgroundColor": "#1B2F5B",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -75,14 +75,7 @@
           "cameraPermission": "AICTE Vimarsh uses the camera to scan your invitation QR code during sign-up."
         }
       ],
-      "expo-sharing",
-      [
-        "expo-media-library",
-        {
-          "savePhotosPermission": "AICTE Vimarsh saves meeting recordings to your gallery.",
-          "isAccessMediaLocationEnabled": false
-        }
-      ]
+      "expo-sharing"
     ],
     "extra": {
       "eas": {

@@ -40,9 +40,8 @@ export function RoomView({ meetingId, title, token, url, isHost, onLeave }: Prop
     let mounted = true;
     (async () => {
       await AudioSession.startAudioSession();
-      // NOTE: screen-capture blocking (FLAG_SECURE) is intentionally NOT enabled, because it
-      // would make on-device meeting recording capture a black screen. In-meeting recording is
-      // the product requirement here, so capture is allowed.
+      // NOTE: screen-capture blocking (FLAG_SECURE) is intentionally NOT enabled, so LiveKit
+      // screen sharing continues to work normally.
     })();
     return () => {
       if (mounted) AudioSession.stopAudioSession();
@@ -86,7 +85,6 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   const [raisedHands, setRaisedHands] = useState<Record<string, boolean>>({});
   const [waiting, setWaiting] = useState<Array<{ userId: string | null; name: string }>>([]);
   const [unread, setUnread] = useState(0);
-  const [recording, setRecording] = useState(false);
   // Mute policy ("everyone muted; unmute needs host approval").
   const [muteAllOn, setMuteAllOn] = useState(false);          // host: is the policy on
   const [mutedByHost, setMutedByHost] = useState(false);      // participant: locked muted
@@ -99,46 +97,6 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
   const [addResults, setAddResults] = useState<Array<{ id: string; fullName: string; email: string }>>([]);
   const [addMsg, setAddMsg] = useState<string | null>(null);
   const socketRef = useRef<Socket | null>(null);
-
-  // On-device screen recording saved to the phone's gallery (no server upload). The native
-  // recorder is loaded lazily and only when installed, so the app builds/runs even if the
-  // module is absent on a given build.
-  const toggleRecording = async () => {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let RecordScreen: any;
-      try {
-        // Optional native module; resolved by name so a missing package doesn't break typing.
-        RecordScreen = (await import('react-native-record-screen' as string)).default;
-      } catch {
-        Alert.alert('Recording', 'On-device recording is not available on this build yet.');
-        return;
-      }
-      const MediaLibrary = await import('expo-media-library');
-      if (!recording) {
-        const perm = await MediaLibrary.requestPermissionsAsync();
-        if (!perm.granted) {
-          Alert.alert('Recording', 'Allow photos/media access so the recording can be saved to your gallery.');
-          return;
-        }
-        await RecordScreen.startRecording({ mic: true });
-        setRecording(true);
-      } else {
-        const res = await RecordScreen.stopRecording();
-        setRecording(false);
-        const uri = res?.result?.outputURL as string | undefined;
-        if (uri) {
-          await MediaLibrary.saveToLibraryAsync(uri);
-          Alert.alert('Recording saved', 'The meeting recording was saved to your device gallery.');
-        } else {
-          Alert.alert('Recording', 'Recording stopped, but no file was produced.');
-        }
-      }
-    } catch (e) {
-      setRecording(false);
-      Alert.alert('Recording', (e as Error).message || 'Could not record the screen on this device.');
-    }
-  };
 
   useEffect(() => {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
@@ -335,17 +293,6 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
           <Text variant="label" color={colors.roomText} numberOfLines={1}>{title}</Text>
           <Text variant="caption" color="rgba(255,255,255,0.6)">{mm}:{ss} · {participants.length} in call</Text>
         </View>
-        {recording && (
-          <View style={styles.recTag}>
-            <View style={styles.recDot} />
-            <Text variant="caption" color="#fff">REC</Text>
-          </View>
-        )}
-        {isHost && (
-          <Pressable style={styles.recBtn} onPress={toggleRecording}>
-            <Ionicons name={recording ? 'stop-circle' : 'radio-button-on'} size={16} color={recording ? colors.danger : '#fff'} />
-          </Pressable>
-        )}
         {isHost && waiting.length > 0 && (
           <Pressable style={styles.waitingBadge} onPress={() => setPaxOpen(true)}>
             <Ionicons name="hourglass-outline" size={14} color="#fff" />
@@ -518,9 +465,6 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.roomBg },
   topBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: spacing.sm },
   waitingBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: colors.accent, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill },
-  recTag: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(192,57,43,0.2)', paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.pill },
-  recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.danger },
-  recBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: colors.roomBorder, alignItems: 'center', justifyContent: 'center' },
   grid: { flexGrow: 1, padding: spacing.sm, gap: spacing.sm },
   tile: { flex: 1, aspectRatio: 1, backgroundColor: colors.roomSurface, borderRadius: radius.md, overflow: 'hidden', margin: 4, minHeight: 200 },
   tileHalf: { aspectRatio: 0.75 },
