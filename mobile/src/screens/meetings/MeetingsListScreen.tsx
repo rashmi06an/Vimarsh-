@@ -26,7 +26,7 @@ const SCOPES: { value: MeetingScope; label: string }[] = [
   { value: 'past', label: 'Past' },
 ];
 
-const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD'];
+const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD', 'FACULTY'];
 
 export function MeetingsListScreen({ navigation }: Props) {
   const { user } = useAuth();

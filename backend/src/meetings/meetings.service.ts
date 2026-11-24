@@ -27,7 +27,7 @@ import {
 } from './dto/meeting.dto';
 
 // Roles permitted to schedule meetings (Faculty only if granted — future flag).
-const CAN_SCHEDULE: Role[] = [Role.SUPER_ADMIN, Role.MINISTRY, Role.INSTITUTE_ADMIN, Role.HOD];
+const CAN_SCHEDULE: Role[] = [Role.SUPER_ADMIN, Role.MINISTRY, Role.INSTITUTE_ADMIN, Role.HOD, Role.FACULTY];
 
 @Injectable()
 export class MeetingsService {

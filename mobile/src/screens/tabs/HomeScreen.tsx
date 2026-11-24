@@ -23,7 +23,7 @@ const QUICK: { key: string; label: string; icon: keyof typeof Ionicons.glyphMap 
   { key: 'history', label: 'History', icon: 'time-outline' },
 ];
 
-const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD'];
+const CAN_SCHEDULE = ['SUPER_ADMIN', 'MINISTRY', 'INSTITUTE_ADMIN', 'HOD', 'FACULTY'];
 
 export function HomeScreen() {
   const { user } = useAuth();
