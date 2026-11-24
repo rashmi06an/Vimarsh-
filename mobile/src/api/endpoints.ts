@@ -4,6 +4,7 @@ import {
   CreateMeetingInput,
   CreatedInvite,
   Department,
+  DirectoryUser,
   InvitationItem,
   InviteListItem,
   InviteValidation,
@@ -55,6 +56,8 @@ export const authApi = {
 
 export const usersApi = {
   me: () => apiRequest<Profile>('/users/me'),
+  directory: (q?: string) =>
+    apiRequest<DirectoryUser[]>(`/users/directory${q && q.trim() ? `?q=${encodeURIComponent(q.trim())}` : ''}`),
   updateMe: (body: { fullName?: string; phone?: string; photoUrl?: string }) =>
     apiRequest<Profile>('/users/me', { method: 'PATCH', body }),
   sessions: () => apiRequest<Array<{ id: string; deviceInfo: string | null; createdAt: string; expiresAt: string }>>('/users/me/sessions'),

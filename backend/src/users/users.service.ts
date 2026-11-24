@@ -1,6 +1,8 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, Role, UserStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { AuthedUser } from '../common/interfaces/jwt-payload.interface';
 
 @Injectable()
 export class UsersService {
@@ -8,6 +10,34 @@ export class UsersService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
   ) {}
+
+  /**
+   * Registered members the actor may invite to a meeting: approved accounts in the actor's own
+   * organisation (AICTE/Ministry roles may search across all institutions), excluding themselves.
+   * Backs the invite picker so only in-app users can be invited — there are no external invites.
+   */
+  async directory(actor: AuthedUser, q?: string) {
+    const crossOrg = actor.role === Role.SUPER_ADMIN || actor.role === Role.MINISTRY;
+    const where: Prisma.UserWhereInput = {
+      status: UserStatus.APPROVED,
+      id: { not: actor.id },
+      ...(crossOrg ? {} : { orgId: actor.orgId ?? undefined }),
+    };
+    const term = q?.trim();
+    if (term) {
+      where.OR = [
+        { fullName: { contains: term, mode: 'insensitive' } },
+        { email: { contains: term, mode: 'insensitive' } },
+      ];
+    }
+    const users = await this.prisma.user.findMany({
+      where,
+      select: { id: true, fullName: true, email: true, role: true, org: { select: { name: true } } },
+      orderBy: { fullName: 'asc' },
+      take: 30,
+    });
+    return users.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email, role: u.role, orgName: u.org?.name ?? null }));
+  }
 
   async getProfile(userId: string) {
     const user = await this.prisma.user.findUnique({

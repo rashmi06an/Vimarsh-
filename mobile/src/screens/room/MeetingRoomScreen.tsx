@@ -1,5 +1,5 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, PermissionsAndroid, Platform, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { Socket } from 'socket.io-client';
@@ -18,6 +18,26 @@ type Props = NativeStackScreenProps<MeetingsStackParams, 'MeetingRoom'>;
 // Lazy so the native WebRTC module only loads when actually entering a room
 // (keeps the rest of the app usable in Expo Go; the room needs a dev build).
 const RoomView = React.lazy(() => import('./RoomView').then((m) => ({ default: m.RoomView })));
+
+// Android requires camera + microphone to be granted at RUNTIME (declaring them in the
+// manifest is not enough). Without this, LiveKit cannot capture media and the room drops
+// immediately, which looked like "Preparing…" then an instant exit. iOS prompts on first
+// capture via the Info.plist usage strings, so no explicit request is needed there.
+async function ensureMediaPermissions(): Promise<boolean> {
+  if (Platform.OS !== 'android') return true;
+  try {
+    const res = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.CAMERA,
+      PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+    ]);
+    return (
+      res[PermissionsAndroid.PERMISSIONS.CAMERA] === PermissionsAndroid.RESULTS.GRANTED &&
+      res[PermissionsAndroid.PERMISSIONS.RECORD_AUDIO] === PermissionsAndroid.RESULTS.GRANTED
+    );
+  } catch {
+    return false;
+  }
+}
 
 type Phase = 'loading' | 'passcode' | 'waiting' | 'joined' | 'error';
 
@@ -76,11 +96,22 @@ export function MeetingRoomScreen({ route, navigation }: Props) {
   }, [meetingId, fetchTokenAndJoin]);
 
   useEffect(() => {
-    meetingsApi.details(meetingId).then((m) => {
-      setTitle(m.title);
-      if (m.hasPasscode && !m.canManage) { setNeedPasscode(true); setPhase('passcode'); }
-      else attemptJoin();
-    }).catch(() => attemptJoin());
+    (async () => {
+      const granted = await ensureMediaPermissions();
+      if (!granted) {
+        setError('Camera and microphone access are required to join the meeting. Please allow them (or enable them in Settings) and try again.');
+        setPhase('error');
+        return;
+      }
+      try {
+        const m = await meetingsApi.details(meetingId);
+        setTitle(m.title);
+        if (m.hasPasscode && !m.canManage) { setNeedPasscode(true); setPhase('passcode'); }
+        else attemptJoin();
+      } catch {
+        attemptJoin();
+      }
+    })();
     return () => { socketRef.current?.close(); };
   }, [meetingId]);
 

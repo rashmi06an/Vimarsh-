@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { IsOptional, IsString, MaxLength } from 'class-validator';
 import { UsersService } from './users.service';
@@ -25,6 +25,12 @@ export class UsersController {
   @ApiOperation({ summary: 'Get my profile' })
   me(@CurrentUser() user: AuthedUser) {
     return this.users.getProfile(user.id);
+  }
+
+  @Get('directory')
+  @ApiOperation({ summary: 'Search registered members you may invite to a meeting' })
+  directory(@CurrentUser() user: AuthedUser, @Query('q') q?: string) {
+    return this.users.directory(user, q);
   }
 
   @Patch('me')

@@ -1,4 +1,12 @@
 export type Role = 'SUPER_ADMIN' | 'MINISTRY' | 'INSTITUTE_ADMIN' | 'HOD' | 'FACULTY' | 'GUEST';
+
+export interface DirectoryUser {
+  id: string;
+  fullName: string;
+  email: string;
+  role: Role;
+  orgName: string | null;
+}
 export type UserStatus = 'PENDING_OTP' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'SUSPENDED';
 
 export interface PublicUser {

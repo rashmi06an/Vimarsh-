@@ -50,7 +50,17 @@ export function RoomView({ meetingId, title, token, url, isHost, onLeave }: Prop
   }, []);
 
   return (
-    <LiveKitRoom serverUrl={url} token={token} connect audio video onDisconnected={onLeave}>
+    <LiveKitRoom
+      serverUrl={url}
+      token={token}
+      connect
+      audio
+      video
+      onDisconnected={onLeave}
+      onError={(e) => {
+        Alert.alert('Connection problem', e?.message || 'Could not connect to the meeting. Please check your connection and try again.');
+      }}
+    >
       <RoomInner meetingId={meetingId} title={title} isHost={isHost} onLeave={onLeave} />
     </LiveKitRoom>
   );
@@ -137,6 +147,19 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
     const next = !handRaised;
     setHandRaised(next);
     socketRef.current?.emit('hand:raise', { meetingId, raised: next });
+  };
+
+  const [sharingScreen, setSharingScreen] = useState(false);
+  const toggleScreenShare = async () => {
+    try {
+      const next = !sharingScreen;
+      // Starting share pops the OS screen-capture consent dialog; Android runs it in the
+      // MediaProjection foreground service provided by react-native-webrtc.
+      await localParticipant.setScreenShareEnabled(next);
+      setSharingScreen(next);
+    } catch (e) {
+      Alert.alert('Screen share', (e as Error).message || 'Could not start screen sharing.');
+    }
   };
 
   const flipCamera = async () => {
@@ -231,6 +254,7 @@ function RoomInner({ meetingId, title, isHost, onLeave }: { meetingId: string; t
         <Ctrl icon={isMicrophoneEnabled ? 'mic' : 'mic-off'} active={isMicrophoneEnabled} onPress={() => localParticipant.setMicrophoneEnabled(!isMicrophoneEnabled)} />
         <Ctrl icon={isCameraEnabled ? 'videocam' : 'videocam-off'} active={isCameraEnabled} onPress={() => localParticipant.setCameraEnabled(!isCameraEnabled)} />
         <Ctrl icon="camera-reverse" onPress={flipCamera} />
+        <Ctrl icon={sharingScreen ? 'stop-circle' : 'tv-outline'} active={sharingScreen} onPress={toggleScreenShare} />
         <Ctrl icon="hand-left" active={handRaised} onPress={toggleHand} />
         <Ctrl icon="chatbubble-ellipses" badge={unread} onPress={() => { setChatOpen(true); setUnread(0); }} />
         <Ctrl icon="people" onPress={() => setPaxOpen(true)} />

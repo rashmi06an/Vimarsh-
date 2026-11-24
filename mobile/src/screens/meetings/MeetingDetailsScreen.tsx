@@ -9,7 +9,6 @@ import { Card } from '../../components/Card';
 import { Button } from '../../components/Button';
 import { ConfidentialityBadge } from '../../components/Badge';
 import { LoadingState, ErrorState } from '../../components/States';
-import { DocumentsSection } from './DocumentsSection';
 import { RecordingsSection } from './RecordingsSection';
 import { colors, spacing } from '../../theme';
 import { meetingsApi, invitationsApi } from '../../api/endpoints';
@@ -109,15 +108,11 @@ export function MeetingDetailsScreen({ route, navigation }: Props) {
       <Card style={styles.card}>
         <Row icon="person-outline" label="Host" value={m.host?.fullName ?? '—'} />
         <Row icon="people-outline" label="Participants" value={`${m.participants.length}`} />
-        <Row icon="document-outline" label="Documents" value={`${m.documentCount}`} />
         <Row icon="shield-outline" label="Waiting room" value={m.waitingRoomEnabled ? 'On' : 'Off'} />
         {m.hasPasscode && <Row icon="lock-closed-outline" label="Passcode" value="Required" />}
       </Card>
 
-      {/* Documents — visible to anyone with meeting access; upload for invited/host. */}
-      {!isCancelled && (
-        <DocumentsSection meetingId={id} canUpload={m.canManage || m.myInvitationStatus === 'ACCEPTED' || m.myInvitationStatus === 'PENDING'} />
-      )}
+      {/* File sharing has been removed — use in-meeting screen share instead. */}
 
       {/* Recordings — shown when recording is permitted (the only case in which any can exist).
           Any meeting viewer can access them; opening one is audit-logged by the backend. */}

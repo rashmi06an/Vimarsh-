@@ -12,6 +12,7 @@
     "prisma:generate": "prisma generate",
     "prisma:push": "prisma db push",
     "seed": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"commonjs\",\"types\":[\"node\"]}' ts-node --skip-project prisma/seed.ts",
+    "reset-admin": "TS_NODE_COMPILER_OPTIONS='{\"module\":\"commonjs\",\"types\":[\"node\"]}' ts-node --skip-project prisma/reset-admin.ts",
     "test": "jest --config jest.config.js",
     "test:e2e": "jest --config jest-e2e.config.js --runInBand"
   },

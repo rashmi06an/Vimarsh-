@@ -17,7 +17,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { LivekitService } from '../livekit/livekit.service';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
-import { generateMeetingCode, hashToken, randomToken } from '../common/crypto/hash.util';
+import { generateMeetingCode } from '../common/crypto/hash.util';
 import { AuthedUser } from '../common/interfaces/jwt-payload.interface';
 import {
   CreateMeetingDto,
@@ -322,26 +322,23 @@ export class MeetingsService {
           await this.notifications.create(target.id, 'INVITATION', 'Meeting invitation', `You are invited to "${meeting.title}".`, { meetingId: meeting.id, meetingCode: meeting.meetingCode });
           results.invited += 1;
         } else if (inv.email) {
+          // Invitations are restricted to REGISTERED members only — no external/guest invites.
+          // People outside the app cannot be invited (they would never receive a calendar update
+          // or in-app notification). An email is accepted only if it resolves to an existing
+          // account the host is allowed to invite; otherwise it is skipped.
           const email = inv.email.toLowerCase().trim();
           const existingUser = await this.prisma.user.findUnique({ where: { email } });
-          if (existingUser && (crossOrgAllowed || existingUser.orgId === meeting.orgId)) {
-            // The email belongs to a registered member the host may invite (same institution, or
-            // an AICTE/Ministry host convening across institutions). Invite them IN-APP, linked to
-            // their account, so it appears in their invitations — not as a guest link. This mirrors
-            // the cross-institution policy of a direct userId invite above.
-            const sub = await this.inviteInternal(actor, meeting, [{ userId: existingUser.id, role: inv.role }]);
-            results.invited += sub.invited;
-            results.skipped.push(...sub.skipped);
+          if (!existingUser) {
+            results.skipped.push({ who: email, reason: 'not a registered member' });
             continue;
           }
-          const dup = await this.prisma.invitation.findFirst({ where: { meetingId: meeting.id, inviteeEmail: email } });
-          if (dup) { results.skipped.push({ who: email, reason: 'already invited' }); continue; }
-          const token = randomToken(24);
-          await this.prisma.invitation.create({
-            data: { meetingId: meeting.id, inviteeEmail: email, role: InvitationRole.GUEST, status: 'PENDING', tokenHash: hashToken(token), expiresAt: meeting.endAt },
-          });
-          results.guestLinks.push({ email, token }); // raw token returned once for sharing
-          results.invited += 1;
+          if (!crossOrgAllowed && existingUser.orgId !== meeting.orgId) {
+            results.skipped.push({ who: email, reason: 'different institution' });
+            continue;
+          }
+          const sub = await this.inviteInternal(actor, meeting, [{ userId: existingUser.id, role: inv.role }]);
+          results.invited += sub.invited;
+          results.skipped.push(...sub.skipped);
         } else {
           results.skipped.push({ who: '(empty)', reason: 'no userId or email' });
         }
