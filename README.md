@@ -55,7 +55,7 @@ sequenceDiagram
     Admin-->>Member: Relay the code
     Member->>API: POST /auth/reset-password (email, code, new password)
     API->>API: Verify once, re-hash, revoke all sessions
-    API-->>App: Success; sign in with new password
+    API-->>App: Success — sign in with new password
 ```
 
 The reset code is random, 60-minute, single-use, and stored only as a SHA-256 hash. It appears exactly once (in the approval response) — never in listings, logs, or errors. Completing a reset revokes all of the member's sessions immediately.
